@@ -30,25 +30,82 @@ ssh <username>@10.100.59.229
 conda create --name sdg python=3.11
 conda activate sdg
 conda install pytorch torchvision pytorch-cuda=11.8 -c pytorch -c nvidia
-pip install diffusers h5py pillow numpy pytorch-fid
+pip install diffusers h5py pillow numpy pytorch-fid huggingface_hub
 ```
 
-Upload this folder's code to `~/hest-cdm/` (scp/WinSCP/FileZilla — see guide
-section 2). Upload the `hest-bench/` dataset to
-`/opt/storage/users/${USER}/hest-bench` (persistent, shared-ish storage —
-**not** the fast scratch; the `job_*.sh` scripts stage it to
-`/var/local/storage/${USER}` automatically per job).
+### 1.1 Get the code (git clone)
 
-Pre-warm the FID Inception weights once (compute nodes may lack internet):
+Code lives in [MM-SDG](https://github.com/YiannisChionas/MM-SDG) — make sure
+your local commits are pushed first (`git push` from this machine), then on
+the cluster:
 
 ```bash
-srun --partition=solo --nodes=1 --ntasks-per-node=1 --gpus-per-task=0 --time=00:15:00 --pty bash -i
+cd ~
+git clone https://github.com/YiannisChionas/MM-SDG.git hest-cdm-repo
+ln -s ~/hest-cdm-repo/hpc_experiment ~/hest-cdm
+```
+
+The `job_*.sh` scripts call `~/hest-cdm/train.py` etc., so the symlink keeps
+them working regardless of where the actual repo checkout lives. To update
+later: `cd ~/hest-cdm-repo && git pull`.
+
+### 1.2 Get the dataset (download directly on the cluster)
+
+Per the guide, dataset downloads should happen via an interactive session or
+a non-GPU job — not on the login node directly, and not by uploading ~40GB
+from your laptop. See section 2 below for the exact commands.
+
+### 1.3 Pre-warm the FID Inception weights
+
+Compute nodes may lack internet access, so fetch these once while you have
+an interactive session open anyway:
+
+```bash
+srun --partition=yoda --nodes=1 --ntasks-per-node=1 --gpus-per-task=0 --time=00:15:00 --pty bash -i
 conda activate sdg
 python -c "from pytorch_fid.inception import InceptionV3; InceptionV3([3])"
 exit
 ```
 
-## 2. Train
+## 2. Download the dataset on the cluster
+
+`sbatch -o/-e` below need the log directory to already exist:
+
+```bash
+mkdir -p ~/experiments/hest_cdm
+```
+
+The dataset (HEST-1k `hest-bench`, ~40GB) is downloaded **from inside the
+cluster** straight to persistent storage — never uploaded from your laptop.
+
+**One-time: authenticate with Hugging Face** (same account/token as local
+dev; needed since `hest-bench` requires accepting its terms). This only
+needs an interactive non-GPU session, and the resulting token is cached
+under `~/.cache/huggingface/`, which is on your (shared) home directory —
+so later batch jobs can reuse it without logging in again:
+
+```bash
+srun --partition=yoda --nodes=1 --ntasks-per-node=1 --gpus-per-task=0 --time=00:10:00 --pty bash -i
+conda activate sdg
+hf auth login
+exit
+```
+
+**Submit the actual download as a (non-GPU) job**, so it survives
+disconnects and doesn't run on the login node:
+
+```bash
+sbatch -J hest_download -o ~/experiments/hest_cdm/download.out -e ~/experiments/hest_cdm/download.err \
+    slurm/job_download_data.sh
+```
+
+Check progress: `squeue -u $(whoami)` and `tail -f ~/experiments/hest_cdm/download.out`.
+This lands at `/opt/storage/users/${USER}/hest-bench` — the `job_*.sh`
+training/sampling/FID scripts stage it to fast local scratch
+(`/var/local/storage/${USER}`) automatically per job, so you don't need to
+move it again.
+
+## 3. Train
 
 Single job (10 epochs, ~3.2h estimated, fits under the 5h limit):
 
@@ -67,7 +124,7 @@ instead (edit `N_STEPS`/`EPOCHS_PER_STEP` in the script first):
 Check progress: `squeue -u $(whoami)`, and tail the `.err`/`.out` log files
 under `~/experiments/hest_cdm_train/logs/`.
 
-## 3. Generate synthetic samples
+## 4. Generate synthetic samples
 
 Once `checkpoint.pt` exists under
 `/opt/storage/users/${USER}/experiments/hest-cdm/`:
@@ -80,7 +137,7 @@ sbatch -J hest_cdm_sample -o ~/experiments/hest_cdm/sample.out -e ~/experiments/
 ~2.1h estimated for 10,000 images at batch=128. If it times out, just
 resubmit the same command — it resumes from where it left off.
 
-## 4. Compute FID (real vs. synthetic)
+## 5. Compute FID (real vs. synthetic)
 
 ```bash
 sbatch -J hest_cdm_fid -o ~/experiments/hest_cdm/fid.out -e ~/experiments/hest_cdm/fid.err \

@@ -7,7 +7,7 @@ downloaded from the internet on first use -- compute nodes on this cluster
 may not have internet access, so pre-warm the cache once from an
 interactive CPU session before submitting the GPU job:
 
-    srun --partition=solo --nodes=1 --ntasks-per-node=1 --gpus-per-task=0 \
+    srun --partition=yoda --nodes=1 --ntasks-per-node=1 --gpus-per-task=0 \
          --time=00:15:00 --pty bash -i
     conda activate sdg
     python -c "from pytorch_fid.inception import InceptionV3; InceptionV3([3])"
