@@ -26,10 +26,10 @@ def main():
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--latent-dim", type=int, default=16)
     parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--beta", type=float, default=4.0)
+    parser.add_argument("--beta", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

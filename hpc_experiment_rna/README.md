@@ -118,7 +118,8 @@ do).
 | Flag | Default | Notes |
 |---|---|---|
 | `train_vae.py --latent-dim` | 16 | conditioning vector size fed into the UNet (replaces `class_emb_size=4` from the discrete version) |
-| `train_vae.py --beta` | 4.0 | higher = more disentangled/compressed latent, at some reconstruction cost |
+| `train_vae.py --beta` | 0.01 | **do not raise much above this** -- an earlier run with β=4.0 caused posterior collapse (KL≈0, decoder ignores the latent entirely, reconstruction loss stuck at the trivial "predict zero" baseline of ~1.0). The paper uses β=0.005; higher β pushes the encoder to match the prior instead of encoding real information, which happened here almost immediately |
+| `train_vae.py --lr` | 1e-4 | lowered from 1e-3 as a precaution (same class of issue as the diffusion `--lr` below, even though the direct trigger this time was β, not lr) |
 | `train_rna.py --lr` | 1e-4 | same caution as `hpc_experiment`: raising this collapsed training there |
 | `sample_rna.py --max-samples` | 2000 | held-out spots to generate; raise if you want a tighter FID estimate |
 
