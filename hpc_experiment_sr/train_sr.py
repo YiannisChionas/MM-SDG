@@ -18,6 +18,7 @@ slurm/submit_train.sh even with multi-GPU speedup.
 
 import argparse
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -54,6 +55,10 @@ def main():
                          help="Per-process worker count -- total workers = this x num processes")
     parser.add_argument("--mixed-precision", type=str, default="no", choices=["no", "fp16", "bf16"])
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--persist-dir", type=str, default=None,
+                         help="If set, copy checkpoint.pt + losses.json here after EVERY epoch "
+                              "(not just at job exit) -- protects progress against a hard "
+                              "SLURM timeout kill, which skips the job script's trailing cp -a")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -139,8 +144,16 @@ def main():
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             save_checkpoint(ckpt_path, accelerator.unwrap_model(model), optimizer, epoch, losses)
-            with open(out_dir / "losses.json", "w") as f:
+            losses_path = out_dir / "losses.json"
+            with open(losses_path, "w") as f:
                 json.dump(losses, f)
+
+            if args.persist_dir:
+                persist_dir = Path(args.persist_dir)
+                persist_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy(ckpt_path, persist_dir / "checkpoint.pt")
+                shutil.copy(losses_path, persist_dir / "losses.json")
+                log(f"  Synced checkpoint to {persist_dir} (epoch {epoch})")
         accelerator.wait_for_everyone()
 
     log("Training complete.")
