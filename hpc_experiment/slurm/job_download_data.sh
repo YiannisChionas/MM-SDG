@@ -3,6 +3,9 @@
 #SBATCH --ntasks 1
 #SBATCH --time=04:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # No --gres line: this is a download/IO job, not a GPU job (per the cluster
 # guide's instructions for downloading datasets directly on the server).
 # Downloads straight to persistent storage -- NOT fast scratch -- since this

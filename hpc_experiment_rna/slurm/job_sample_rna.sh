@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=03:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Paired generation on held-out (test-split) WSIs, capped at 2000 spots by
 # default -- resubmit the same command to resume if it times out.
 

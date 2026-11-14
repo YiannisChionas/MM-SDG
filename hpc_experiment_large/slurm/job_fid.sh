@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # --per-class 200 to match sample.py's reduced sample count (see
 # job_sample.sh). IMPORTANT: this means FID here is NOT directly comparable
 # to hpc_experiment's 1000/class result on sample-size grounds alone (FID is

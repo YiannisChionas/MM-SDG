@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Lightweight: Inception features over ~4000 images (2000 real + 2000 synth).
 # Pre-warm weights first if this fails on a download/connection error --
 # see compute_fid_rna.py docstring.

@@ -5,6 +5,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=04:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # LARGE model (454.5M params, ~4x hpc_experiment's 114M). Measured locally:
 # batch=32 -> 535ms/step, 14.75GB peak VRAM on a 16GB card. Extrapolated to
 # batch=64 (untestable locally -- would OOM): ~1070ms/step, ~3.6x slower

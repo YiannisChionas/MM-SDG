@@ -5,6 +5,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=04:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # CCRCC train-split only (20/24 WSIs) -- smaller than the pooled 10-class
 # experiment, should comfortably fit several epochs in one job. Requires
 # vae_checkpoint.pt from job_train_vae.sh to already exist.

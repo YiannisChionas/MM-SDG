@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=03:30:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Reduced to 200/class (2000 total, vs 1000/class for the small model) --
 # the large model's per-step cost makes 10,000 images infeasible within the
 # 5h job limit (estimated >14h at full scale). 2000 should fit in ~2.5h at

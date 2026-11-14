@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # --per-class 100 to match sample_sr.py. Real patches exported at NATIVE
 # 224x224 (no downsampling) -- this is the whole point of this experiment:
 # FID here only needs a 224->299 Inception resize (1.33x), not

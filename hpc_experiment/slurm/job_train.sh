@@ -5,6 +5,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=04:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # ~3.2h estimated for 10 epochs over the pooled 236K-patch dataset (fp32,
 # batch=64) -- 4h leaves margin under the cluster's 5h hard limit. For more
 # epochs, use submit_train.sh instead of calling this directly.

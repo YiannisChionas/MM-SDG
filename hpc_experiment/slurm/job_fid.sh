@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Lightweight: just Inception feature extraction over 20K images (10K real +
 # 10K synthetic). Uses obiwan (MIG A100) since full A100/A6000 muscle isn't
 # needed here -- please don't request yoda/chewbacca for this.

@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=03:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # ~2.1h estimated for 10,000 images (1000/class x 10 classes) at batch=128,
 # fp32, 1000-step reverse diffusion each. 3h leaves margin.
 # Resumable: rerun with the same --output-dir to continue after a timeout.

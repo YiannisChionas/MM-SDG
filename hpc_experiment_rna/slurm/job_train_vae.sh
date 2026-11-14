@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=00:30:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Tiny model (50-dim MLP VAE) -- a small MIG slice is plenty, please don't
 # request yoda/chewbacca for this.
 

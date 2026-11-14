@@ -4,6 +4,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=03:00:00
 
+set -e  # propagate python/sbatch-step failures -- without this, a crashed
+        # job falls through to cp -a below and SLURM reports false success
+
 # Cascaded sampling: stage-1 (hpc_experiment checkpoint) generates 64x64,
 # upsampled, fed into stage-2 (this experiment's checkpoint) for 224x224.
 # 100/class (1000 total), batch=32 -- measured forward-only cost locally
