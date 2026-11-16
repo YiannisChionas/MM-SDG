@@ -4,7 +4,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=04:45:00
 
-set -e
+set -ex  # -x: print every command before running it -- temporary, for
+         # debugging a mysterious instant 0-1s failure with zero output
 
 # Cascaded paired sampling on held-out WSIs: stage-1 (hpc_experiment_rna
 # checkpoint) generates 64x64 conditioned on real expression, upsampled +
