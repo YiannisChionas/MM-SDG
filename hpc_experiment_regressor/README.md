@@ -96,16 +96,23 @@ Results land in `/opt/storage/users/${USER}/experiments/hest-regressor/`.
 
 ## Result
 
-*(to be filled in once both regressors are trained and evaluated)*
+| | real_baseline_mae | real_pairs_mae (sanity) | **synthetic_mae** | relative degradation |
+|---|---|---|---|---|
+| `hpc_experiment_rna` (64×64) | 0.8533 | 0.8758 | **1.0926** | +24-28% worse than baseline |
+| `hpc_experiment_rna_sr` (224×224 cascade) | 0.8512 | 0.8512 | **1.2740** | +49% worse than baseline |
 
-| | real_baseline_mae | real_pairs_mae | synthetic_mae |
-|---|---|---|---|
-| `hpc_experiment_rna` (64×64) | | | |
-| `hpc_experiment_rna_sr` (224×224 cascade) | | | |
+(MAE in z-scored units; lower = better conditioning fidelity. Sanity
+checks pass: `real_pairs_mae` ≈ `real_baseline_mae` in both cases.)
 
-If `synthetic_mae` stays close to `real_baseline_mae`/`real_pairs_mae`,
-the RNA-conditioning signal is faithfully materialized in the generated
-image, not just "generically realistic." A `synthetic_mae` well above the
-real baseline would mean the diffusion model produces plausible-looking
-tissue largely independent of the specific expression vector it was given
-— i.e. good FID without real conditioning fidelity.
+`synthetic_mae` is clearly above the real baseline in both cases, so the
+generated images don't encode their conditioning expression vector as
+faithfully as real images do -- RNA-conditioning materializes *some*
+signal (consistent with it beating class-conditioning on FID), but not
+the full fidelity of a real image. Importantly, the relative degradation
+roughly **doubles** going through the cascade (+24-28% → +49%): even
+though the cascade's FID advantage over class-conditioning held up
+(267.25 vs 282.86, see `hpc_experiment_rna_sr`'s README), the specific
+expression→image fidelity degrades considerably more than FID alone would
+suggest. The stage-2 SR model appears to prioritize general realistic
+texture over preserving the exact molecular signal passed through from
+stage 1 -- a failure mode invisible to FID but caught here.
