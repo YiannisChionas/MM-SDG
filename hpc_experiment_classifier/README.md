@@ -69,6 +69,22 @@ sbatch -J hest_clf_eval224 -o ~/experiments/hest_classifier/eval224.out -e ~/exp
     --classifier-checkpoint /opt/storage/users/$USER/experiments/hest-classifier/classifier_224.pt \
     --samples-dir /opt/storage/users/$USER/experiments/hest-sr/synthetic \
     --output-json /opt/storage/users/$USER/experiments/hest-classifier/eval_sr_224.json
+
+# Evaluate the SAME classifiers against the RNA-conditioned experiments'
+# paired samples (flat real/synthetic, all CCRCC) -- directly comparable
+# to the CCRCC entry above, despite the totally different conditioning
+# mechanism (no class label given at all, only real gene expression).
+sbatch -J hest_clf_eval_rna64 -o ~/experiments/hest_classifier/eval_rna64.out -e ~/experiments/hest_classifier/eval_rna64.err \
+    slurm/job_eval_classifier_on_rna.sh \
+    --classifier-checkpoint /opt/storage/users/$USER/experiments/hest-classifier/classifier_64.pt \
+    --samples-dir /opt/storage/users/$USER/experiments/hest-rna/samples \
+    --output-json /opt/storage/users/$USER/experiments/hest-classifier/eval_rna_64.json
+
+sbatch -J hest_clf_eval_rna_sr224 -o ~/experiments/hest_classifier/eval_rna_sr224.out -e ~/experiments/hest_classifier/eval_rna_sr224.err \
+    slurm/job_eval_classifier_on_rna.sh \
+    --classifier-checkpoint /opt/storage/users/$USER/experiments/hest-classifier/classifier_224.pt \
+    --samples-dir /opt/storage/users/$USER/experiments/hest-rna-sr/samples \
+    --output-json /opt/storage/users/$USER/experiments/hest-classifier/eval_rna_sr_224.json
 ```
 
 Results land in `/opt/storage/users/${USER}/experiments/hest-classifier/`.
@@ -82,17 +98,34 @@ Results land in `/opt/storage/users/${USER}/experiments/hest-classifier/`.
   class against the folder's (= conditioning) label — **the actual
   class-conditioning fidelity number**.
 
+`eval_classifier_on_rna.py` reports the same thing in a different shape
+(`real_accuracy` / `synthetic_accuracy` against a single fixed
+`--true-cancer-type`, since the RNA experiments' samples aren't split into
+per-cancer-type folders) for the RNA-conditioned experiments' samples.
+
 ## Result
 
-*(to be filled in once both classifiers are trained and evaluated)*
+*(to be filled in once everything is trained and evaluated)*
 
-| | real_baseline_accuracy | synthetic_accuracy | synthetic_macro_f1 |
-|---|---|---|---|
-| `hpc_experiment` (64×64) | | | |
-| `hpc_experiment_sr` (224×224 cascade) | | | |
+| | real baseline / sanity | synthetic accuracy |
+|---|---|---|
+| `hpc_experiment` (64×64, class-conditioned) | | |
+| `hpc_experiment_sr` (224×224 cascade, class-conditioned) | | |
+| `hpc_experiment_rna` (64×64, RNA-conditioned, CCRCC only) | | |
+| `hpc_experiment_rna_sr` (224×224 cascade, RNA-conditioned, CCRCC only) | | |
+
+The bottom two rows are the most direct comparison in the whole thesis:
+**the same classifier**, same metric, same scale, applied to two
+completely different conditioning mechanisms (an explicit discrete label
+vs. an implicit real gene-expression embedding that never sees a cancer-
+type label at all). If RNA-conditioning's synthetic accuracy on CCRCC
+comes close to class-conditioning's, that means real molecular signal
+alone is enough to reconstruct recognizable tissue identity, without ever
+being told what it is -- a stronger and more specific claim than FID or
+the regressor metric can make on their own.
 
 Read alongside `hpc_experiment_regressor`'s results, this completes the
 conditioning-fidelity picture for both strategies: FID says which is more
-"realistic", this (and the regressor) say which actually *encodes its
-condition* faithfully -- and whether that fidelity survives the cascade
-to 224×224.
+"realistic", the regressor/classifier pair says which actually *encodes
+its condition* faithfully -- and whether that fidelity survives the
+cascade to 224×224.
