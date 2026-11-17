@@ -93,14 +93,23 @@ against the pooled class-conditioned number would mix scopes.
 | | FID (CCRCC only) |
 |---|---|
 | Class-conditioned, 64×64 | 184.4 |
-| Class-conditioned, 224×224 cascade | **282.86** (much worse, not just slightly) |
+| Class-conditioned, 224×224 cascade | 282.86 (much worse, not just slightly) |
 | RNA-conditioned, 64×64 (held-out WSIs) | 167.5 |
-| **RNA-conditioned, 224×224 cascade (this), held-out WSIs** | **?** |
+| **RNA-conditioned, 224×224 cascade (this), held-out WSIs** | **267.25** |
 
-At same-scope comparison, the class-conditioned cascade's quality drop is
-far more dramatic (184 → 283) than the pooled numbers suggested (137 →
-155). If this experiment's result stays well below ~250-280, RNA-
-conditioning's advantage held up (or strengthened) through the cascade
-where class-conditioning's collapsed. If it jumps similarly, that points to
-the cascade/small-SR-model architecture itself being the bottleneck
-regardless of conditioning signal.
+## Result
+
+RNA-conditioning's advantage **holds up** through the cascade: 267.25 <
+282.86, so it stays ahead of class-conditioning at native resolution too,
+same as it was at 64×64 (167.5 vs 184.4).
+
+That said, both conditioning strategies degrade sharply once cascaded to
+224×224 (class: 184.4→282.86, +53%; RNA: 167.5→267.25, +60%) — comparably
+dramatic drops. This points to the shared bottleneck being the cascade
+itself / the deliberately small (64-base-channel) stage-2 SR model, not
+the conditioning signal: conditioning determines the relative ranking
+(RNA ahead in both regimes) but doesn't offset the capacity loss from
+undersizing the SR stage. This matches the RNA-CDM paper's own stage-2
+being considerably wider (128 base channels vs our 64) — a strong
+candidate explanation, and the motivation for training a paper-scale
+model (see the main repo README for the larger-partition request).
