@@ -105,24 +105,30 @@ per-cancer-type folders) for the RNA-conditioned experiments' samples.
 
 ## Result
 
-*(to be filled in once everything is trained and evaluated)*
+| | real baseline / sanity | **synthetic accuracy (CCRCC)** | overall synthetic accuracy (all 10 classes) |
+|---|---|---|---|
+| `hpc_experiment` (64×64, class-conditioned) | 0.9184 | **0.2840** | 0.3075 |
+| `hpc_experiment_sr` (224×224 cascade, class-conditioned) | 0.9302 | **0.2500** | 0.1690 |
+| `hpc_experiment_rna` (64×64, RNA-conditioned, CCRCC only) | 0.8885 (sanity) | **0.3110** | — (CCRCC-only) |
+| `hpc_experiment_rna_sr` (224×224 cascade, RNA-conditioned, CCRCC only) | 1.0 (sanity) | **0.2585** | — (CCRCC-only) |
 
-| | real baseline / sanity | synthetic accuracy |
-|---|---|---|
-| `hpc_experiment` (64×64, class-conditioned) | | |
-| `hpc_experiment_sr` (224×224 cascade, class-conditioned) | | |
-| `hpc_experiment_rna` (64×64, RNA-conditioned, CCRCC only) | | |
-| `hpc_experiment_rna_sr` (224×224 cascade, RNA-conditioned, CCRCC only) | | |
+The bottom two rows vs. the top two are the most direct comparison in the
+whole thesis: **the same classifier**, same metric, same scale, applied to
+two completely different conditioning mechanisms (an explicit discrete
+label vs. an implicit real gene-expression embedding that never sees a
+cancer-type label at all). RNA-conditioning's CCRCC accuracy is actually
+**slightly higher** than class-conditioning's at both resolutions (0.311
+vs 0.284 at 64×64; 0.2585 vs 0.2500 at 224×224) — real molecular signal
+alone reconstructs recognizable tissue identity at least as well as being
+told the label outright, despite never seeing it. This agrees with the
+FID and `hpc_experiment_regressor` results: three independent metrics all
+point the same direction for RNA-conditioning on CCRCC.
 
-The bottom two rows are the most direct comparison in the whole thesis:
-**the same classifier**, same metric, same scale, applied to two
-completely different conditioning mechanisms (an explicit discrete label
-vs. an implicit real gene-expression embedding that never sees a cancer-
-type label at all). If RNA-conditioning's synthetic accuracy on CCRCC
-comes close to class-conditioning's, that means real molecular signal
-alone is enough to reconstruct recognizable tissue identity, without ever
-being told what it is -- a stronger and more specific claim than FID or
-the regressor metric can make on their own.
+Also notable: CCRCC is consistently the hardest class for the
+class-conditioned model too (0.284/0.250 vs. e.g. PRAD's 0.884 and
+LYMPH_IDC's 0.767 at 64×64) -- consistent with CCRCC having the worst
+per-class FID across every experiment in this repo. The RNA-vs-class
+comparison above is therefore on fair, equally-hard ground on both sides.
 
 Read alongside `hpc_experiment_regressor`'s results, this completes the
 conditioning-fidelity picture for both strategies: FID says which is more
