@@ -59,9 +59,14 @@ as `train_vae_paper.py` defaults:
 - **β = 0.005** (was 0.01, `hpc_experiment_rna`'s own empirically-tuned
   value at a much smaller scale -- untested whether 0.005 also avoids
   posterior collapse at this scale; monitor KL from epoch 0).
-- **lr = 3e-3**, Adam (was 1e-4). *Not yet added*: the paper also uses a
-  warmup + cosine LR schedule on top of this -- still just a constant LR
-  here.
+- **lr = 3e-3**, Adam (was 1e-4), with **linear warmup (`--warmup-epochs`,
+  default 10) + cosine decay to 0** over the remaining epochs
+  (`warmup_cosine_lambda` in `train_vae_paper.py`) -- matches the paper's
+  "a warm-up and a cosine learning rate scheduler" (exact warmup length
+  isn't stated in the paper, so 10 is our own choice). Scheduler state is
+  checkpointed and resumes correctly (smoke-tested: LR rises through
+  warmup, decays smoothly after, and continues the same curve across a
+  resume rather than resetting).
 - **250 max epochs with early stopping** (`--patience 20`, monitored on
   a validation split carved out of the train WSIs via `split_train_val_ids`
   -- separate from, and never touching, the official held-out test split).
@@ -108,9 +113,6 @@ every other experiment in this repo so far:
    back in anakin/luke territory (see repo root README for that access
    request) rather than comfortably fitting yoda -- needs an actual
    benchmark run to confirm either way.
-3. **LR schedule**: the paper's warmup + cosine schedule isn't
-   implemented yet (constant lr=3e-3 for now) -- worth adding if initial
-   runs show instability at the higher LR.
 
 None of these are blocking issues with the code -- `select_genes.py` and
 `train_vae_paper.py` both work end-to-end (smoke-tested, including the

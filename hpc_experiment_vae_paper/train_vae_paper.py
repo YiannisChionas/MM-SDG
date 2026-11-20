@@ -16,6 +16,7 @@ open (overfitting risk, actual batch-size/partition benchmark).
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -26,6 +27,18 @@ from data_utils_vae_paper import (
     CANCER_TYPE, load_split_sample_ids, split_train_val_ids, load_gene_panel, build_expr_index,
     GeneExpressionNormalizer, HestExpressionDataset, BetaVAEPaper, vae_loss,
 )
+
+
+def warmup_cosine_lambda(epoch, warmup_epochs, total_epochs):
+    """Linear warmup from 0 to lr over warmup_epochs, then cosine decay to
+    0 over the remaining epochs -- matches the paper's "warm-up and a
+    cosine learning rate scheduler" (exact warmup length isn't stated in
+    the paper, so --warmup-epochs is our own choice, default 10)."""
+    if epoch < warmup_epochs:
+        return (epoch + 1) / max(1, warmup_epochs)
+    progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+    progress = min(1.0, progress)
+    return 0.5 * (1 + math.cos(math.pi * progress))
 
 
 def evaluate(model, loader, device, beta):
@@ -54,6 +67,10 @@ def main():
                          help="Fraction of train-split WSIs held out for early-stopping validation")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=3e-3)
+    parser.add_argument("--warmup-epochs", type=int, default=10,
+                         help="Linear LR warmup length; followed by cosine decay to 0 over the "
+                              "remaining epochs (paper uses 'a warm-up and a cosine learning rate "
+                              "scheduler' but doesn't state the warmup length)")
     parser.add_argument("--hidden1", type=int, default=6000)
     parser.add_argument("--hidden2", type=int, default=4000)
     parser.add_argument("--latent-dim", type=int, default=200)
@@ -89,6 +106,9 @@ def main():
     print(f"Model params: {n_params:,}", flush=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=lambda e: warmup_cosine_lambda(e, args.warmup_epochs, args.epochs),
+    )
 
     start_epoch = 0
     losses, val_losses = [], []
@@ -101,6 +121,8 @@ def main():
         ckpt = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = ckpt["epoch"] + 1
         losses = ckpt.get("losses", [])
         val_losses = ckpt.get("val_losses", [])
@@ -129,6 +151,7 @@ def main():
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
             "losses": losses,
             "val_losses": val_losses,
             "best_val_loss": best_val_loss,
@@ -172,8 +195,10 @@ def main():
         val_losses.append(val_loss)
 
         dt = time.time() - t0
+        cur_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch}: loss={avg_loss:.4f} recon={avg_recon:.4f} kl={avg_kl:.4f} "
-              f"val_loss={val_loss:.4f} time={dt/60:.1f}min", flush=True)
+              f"val_loss={val_loss:.4f} lr={cur_lr:.2e} time={dt/60:.1f}min", flush=True)
+        scheduler.step()
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
