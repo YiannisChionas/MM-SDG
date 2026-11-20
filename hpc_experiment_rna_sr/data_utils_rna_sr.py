@@ -121,13 +121,17 @@ class GeneExpressionNormalizer:
 class HestPatchExprPairDataset(Dataset):
     """Returns (low_res_condition, high_res_target, expr_z) -- the SR-stage
     analogue of hpc_experiment_rna's HestPatchExpressionDataset, with the
-    same low-res degradation as hpc_experiment_sr's HestPatchPairDataset."""
+    same low-res degradation (+ conditioning-augmentation noise) as
+    hpc_experiment_sr's HestPatchPairDataset -- see that class's docstring
+    for why: bridges the train (clean degraded real image) vs sampling
+    (stage-1's actual imperfect DDPM output) distribution gap."""
 
-    def __init__(self, index, normalizer, image_size=224, low_res_size=64):
+    def __init__(self, index, normalizer, image_size=224, low_res_size=64, cond_aug_max_std=0.2):
         self.index = index
         self.normalizer = normalizer
         self.image_size = image_size
         self.low_res_size = low_res_size
+        self.cond_aug_max_std = cond_aug_max_std
         self._handles = {}
 
     def __len__(self):
@@ -159,6 +163,10 @@ class HestPatchExprPairDataset(Dataset):
             low_res, size=(self.image_size, self.image_size),
             mode="bilinear", align_corners=False,
         ).squeeze(0)
+
+        if self.cond_aug_max_std > 0:
+            noise_std = torch.rand(1).item() * self.cond_aug_max_std
+            low_res_upsampled = low_res_upsampled + torch.randn_like(low_res_upsampled) * noise_std
 
         z = self.normalizer.transform(expr)
         return low_res_upsampled, high_res, torch.from_numpy(z.astype(np.float32))

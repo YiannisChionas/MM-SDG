@@ -39,6 +39,18 @@ answers that.
   expression via `hpc_experiment_rna`'s barcode-matching index. CCRCC
   train-split WSIs only (official HEST-bench fold 0).
 
+## Conditioning augmentation (added after the first result)
+
+Same fix as `hpc_experiment_sr` (see that README for the full
+rationale): the regressor-alignment result showed the cascade's
+expression-fidelity degrading much more than its FID did (+24-28% →
++49% MAE), consistent with stage 2 never seeing anything but a perfectly
+clean degraded real image during training. `HestPatchExprPairDataset`
+now adds random-strength Gaussian noise to the low-res conditioning
+during training (`--cond-aug-max-std`, default 0.2, matching Ho et al./
+Imagen's noise conditioning augmentation). Retraining with this change is
+still pending -- the numbers in this README predate it.
+
 ## Time budget
 
 CCRCC train-split is ~55,808 patches (measured from `hpc_experiment_rna`'s

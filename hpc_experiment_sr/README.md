@@ -42,6 +42,20 @@ strategy (their stage-2 UNet dim=128 vs stage-1's 256). Confirmed via local
 benchmarking this is the only configuration that fits a realistic cluster
 time budget at 224×224 (see below).
 
+## Conditioning augmentation (added after the first FID result)
+
+The first trained model's FID at 224×224 (282.86) was *worse* than at
+64×64 (184.4) -- see this experiment's original result discussion.
+A likely cause: training only ever shows stage 2 a **perfectly clean**
+downsample→upsample degradation of a real image, but at sampling time
+it's conditioned on stage 1's actual DDPM output, which carries its own
+artifacts -- a train/inference distribution mismatch. `HestPatchPairDataset`
+now adds random-strength Gaussian noise (std uniform in `[0, --cond-aug-max-std]`,
+default 0.2) to the low-res conditioning during training, following
+Ho et al. ("Cascaded Diffusion Models") and Imagen's noise conditioning
+augmentation. Set `--cond-aug-max-std 0` to recover the old (unaugmented)
+behaviour. Retraining with this change is still pending.
+
 ## Local benchmarks (before committing to this design)
 
 Training (batch + backward), RTX 5070 Ti:

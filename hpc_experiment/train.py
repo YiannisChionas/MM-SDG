@@ -94,7 +94,7 @@ def main():
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             noise = torch.randn_like(x)
-            timesteps = torch.randint(0, 999, (x.shape[0],), device=device).long()
+            timesteps = torch.randint(0, 1000, (x.shape[0],), device=device).long()
             noisy_x = noise_scheduler.add_noise(x, noise, timesteps)
 
             pred = model(noisy_x, timesteps, y)

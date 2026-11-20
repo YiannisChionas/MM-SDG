@@ -59,6 +59,10 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--low-res-size", type=int, default=64)
+    parser.add_argument("--cond-aug-max-std", type=float, default=0.2,
+                         help="Max std of Gaussian noise added to the low-res conditioning during "
+                              "training, to bridge the train (clean degraded real image) vs sampling "
+                              "(stage-1's actual imperfect DDPM output) distribution gap. 0 disables it.")
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--mixed-precision", type=str, default="no", choices=["no", "fp16", "bf16"])
     parser.add_argument("--resume", type=str, default=None)
@@ -100,7 +104,10 @@ def main():
     if not index:
         raise RuntimeError(f"No patches found under {args.data_dir} -- check that the dataset was staged correctly.")
 
-    dataset = HestPatchExprPairDataset(index, normalizer, image_size=args.image_size, low_res_size=args.low_res_size)
+    dataset = HestPatchExprPairDataset(
+        index, normalizer, image_size=args.image_size, low_res_size=args.low_res_size,
+        cond_aug_max_std=args.cond_aug_max_std,
+    )
     loader = DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True, drop_last=True,
@@ -136,7 +143,7 @@ def main():
         epoch_losses = []
         for step, (low_res, high_res, expr_z) in enumerate(loader):
             noise = torch.randn_like(high_res)
-            timesteps = torch.randint(0, 999, (high_res.shape[0],), device=device).long()
+            timesteps = torch.randint(0, 1000, (high_res.shape[0],), device=device).long()
             noisy_high_res = noise_scheduler.add_noise(high_res, noise, timesteps)
 
             pred = model(noisy_high_res, low_res, timesteps, expr_z)

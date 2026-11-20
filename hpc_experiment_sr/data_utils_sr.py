@@ -59,12 +59,22 @@ class HestPatchPairDataset(Dataset):
     training (Ho et al., "Cascaded Diffusion Models"): train stage-2 on
     artificially-degraded REAL images, since stage-1's actual outputs are
     only needed at inference/sampling time, not training time.
+
+    Conditioning augmentation: on top of the clean down->up degradation,
+    add random-strength Gaussian noise to low_res_condition (std sampled
+    per-example, uniform in [0, cond_aug_max_std]). Without this, stage-2
+    only ever sees a PERFECT degradation of a real image during training,
+    but at sampling time it's conditioned on stage-1's actual DDPM output,
+    which carries its own imperfections/artifacts -- a train/inference
+    distribution mismatch that Ho et al. and Imagen both address exactly
+    this way. cond_aug_max_std=0 disables it (recovers the old behaviour).
     """
 
-    def __init__(self, index, image_size=224, low_res_size=64):
+    def __init__(self, index, image_size=224, low_res_size=64, cond_aug_max_std=0.2):
         self.index = index
         self.image_size = image_size
         self.low_res_size = low_res_size
+        self.cond_aug_max_std = cond_aug_max_std
         self._handles = {}
 
     def __len__(self):
@@ -96,6 +106,10 @@ class HestPatchPairDataset(Dataset):
             low_res, size=(self.image_size, self.image_size),
             mode="bilinear", align_corners=False,
         ).squeeze(0)
+
+        if self.cond_aug_max_std > 0:
+            noise_std = torch.rand(1).item() * self.cond_aug_max_std
+            low_res_upsampled = low_res_upsampled + torch.randn_like(low_res_upsampled) * noise_std
 
         return low_res_upsampled, high_res, class_idx
 
