@@ -42,16 +42,33 @@ paper feeding its VAE a large, only lightly filtered gene set.
 `select_qc_passed_genes` in `data_utils_vae_paper.py` still has the
 numbers from both approaches in its docstring.
 
-## Architecture
+## Architecture and training recipe -- matched to the paper's Methods
 
 `BetaVAEPaper` (`data_utils_vae_paper.py`): same MLP beta-VAE shape as
 `hpc_experiment_rna`'s `BetaVAE`, but with independently configurable
-`hidden1`/`hidden2`/`latent_dim` (defaults 6000/4000/200, vs. the single
-`hidden_dim` the small VAE halves internally). `vae_loss` (recon MSE + β·KL)
-is unchanged. At 14,166 input genes the model is **~220.4M params**
-(measured directly, not estimated) -- much closer to the paper's ~282M
-than the earlier (abandoned) HVG-filtered estimate of ~56M, and the
-overfitting-risk discussion below should be read with that in mind.
+`hidden1`/`hidden2`/`latent_dim` (defaults 6000/4000/200). `vae_loss`
+(recon MSE + β·KL) is unchanged. At 14,166 input genes the model is
+**~220.4M params** (measured directly, not estimated) -- much closer to
+the paper's ~282M than the earlier (abandoned) HVG-filtered estimate of
+~56M.
+
+We confirmed the following directly from the paper's Methods
+("βVAE for multi-cancer latent embedding generation") and matched them
+as `train_vae_paper.py` defaults:
+- **BatchNorm1d + LeakyReLU** between layers (was SiLU, no BatchNorm).
+- **β = 0.005** (was 0.01, `hpc_experiment_rna`'s own empirically-tuned
+  value at a much smaller scale -- untested whether 0.005 also avoids
+  posterior collapse at this scale; monitor KL from epoch 0).
+- **lr = 3e-3**, Adam (was 1e-4). *Not yet added*: the paper also uses a
+  warmup + cosine LR schedule on top of this -- still just a constant LR
+  here.
+- **250 max epochs with early stopping** (`--patience 20`, monitored on
+  a validation split carved out of the train WSIs via `split_train_val_ids`
+  -- separate from, and never touching, the official held-out test split).
+  Best-val checkpoint saved separately as `vae_paper_best.pt`.
+- **Batch size kept at our own default (256), not the paper's 128** --
+  deliberate: smaller batches would underutilize whatever GPU we end up
+  training on, with no corresponding benefit for us.
 
 ## Pipeline
 
@@ -64,41 +81,38 @@ mkdir -p ~/experiments/hest_vae_paper
 sbatch -J hest_vae_paper_genes -o ~/experiments/hest_vae_paper/genes.out -e ~/experiments/hest_vae_paper/genes.err \
     slurm/job_select_genes.sh
 
-# Step 2: train the VAE (NOT submitted yet -- see "Settings to decide
-# together" below first)
+# Step 2: train the VAE (defaults now match the paper's beta/epochs/
+# architecture -- see above; NOT submitted yet, still waiting on an
+# actual batch-size/partition benchmark, see below)
 sbatch -J hest_vae_paper_train -o ~/experiments/hest_vae_paper/train.out -e ~/experiments/hest_vae_paper/train.err \
-    slurm/job_train_vae_paper.sh --epochs 50 --batch-size 256 --beta 0.01 --lr 1e-4
+    slurm/job_train_vae_paper.sh
 ```
 
 `job_train_vae_paper.sh` picks up whichever `gene_panel_*.json` exists in
 the experiment dir, so it works regardless of the exact gene count.
 Results land in `/opt/storage/users/${USER}/experiments/hest-vae-paper/`.
 
-## Settings to decide together before running at scale
+## Still open before running at scale
 
-At ~220.4M params trained on ~56K training spots, this is a genuinely
-different regime from every other experiment in this repo so far --
-nearly a 4:1 param-to-example ratio. Things worth deciding before
-submitting `job_train_vae_paper.sh` for real:
+At ~220.4M params trained on ~56K training spots (minus the validation
+split, so really ~42-45K), this is a genuinely different regime from
+every other experiment in this repo so far:
 
-1. **Overfitting risk**: real and significant at this ratio. Likely
-   needs weight decay and/or dropout; may still be worth considering a
-   smaller `hidden1`/`hidden2` (not the gene panel) if early runs show
-   clear overfitting (train loss falling, held-out reconstruction not).
-2. **β (posterior collapse)**: `hpc_experiment_rna`'s VAE needed β=0.01
-   (not the paper's reported β≈0.005) to avoid posterior collapse at a
-   much smaller scale -- unclear whether that transfers to 200 latent
-   dims / this capacity. Worth monitoring KL alongside recon loss from
-   epoch 0, same diagnostic as before.
-3. **Batch size / GPU**: `--batch-size 256` is just inherited from the
-   small VAE's default and hasn't been benchmarked at this param count.
-   At ~220M params this is back in anakin/luke territory (see repo root
-   README for that access request) rather than comfortably fitting yoda
-   -- needs an actual benchmark run to confirm either way.
-4. **Epochs**: 50 is the small VAE's default, not benchmarked here either
-   -- convergence behavior at this scale is unknown until we run it.
+1. **Overfitting risk**: real and significant at this ratio. The paper's
+   only stated defenses are BatchNorm + early stopping (no dropout/weight
+   decay mentioned) -- both now in place here too, but whether they're
+   *enough* at our much smaller example count (likely fewer patients in
+   their bulk cohort than our spot count, but spot-level data is noisier
+   per-example) is untested until we actually run it and watch val loss.
+2. **Batch size / GPU**: still not benchmarked at ~220M params. This is
+   back in anakin/luke territory (see repo root README for that access
+   request) rather than comfortably fitting yoda -- needs an actual
+   benchmark run to confirm either way.
+3. **LR schedule**: the paper's warmup + cosine schedule isn't
+   implemented yet (constant lr=3e-3 for now) -- worth adding if initial
+   runs show instability at the higher LR.
 
 None of these are blocking issues with the code -- `select_genes.py` and
-`train_vae_paper.py` both work end-to-end (smoke-tested) via CLI args.
-They're open modeling decisions to make together before committing
-cluster time to a real run.
+`train_vae_paper.py` both work end-to-end (smoke-tested, including the
+early-stopping/resume logic) via CLI args. They're open questions that
+need an actual cluster run to answer, not further guessing.

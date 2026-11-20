@@ -14,6 +14,7 @@ imported across experiment folders), matching this repo's convention.
 
 import json
 import os
+import random
 
 import anndata as ad
 import h5py
@@ -32,6 +33,20 @@ def load_split_sample_ids(hest_dir, cancer_type, fold, split):
     csv_path = os.path.join(hest_dir, cancer_type, "splits", f"{split}_{fold}.csv")
     df = pd.read_csv(csv_path)
     return df["sample_id"].tolist()
+
+
+def split_train_val_ids(train_ids, val_frac=0.2, seed=0):
+    """Carve a validation subset out of the official train-split WSIs, by
+    WSI (not by spot), for early stopping -- separate from, and not to be
+    confused with, the official held-out TEST split used for final
+    evaluation. Deterministic given seed."""
+    ids = sorted(train_ids)
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+    n_val = max(1, int(len(ids) * val_frac))
+    val_ids = ids[:n_val]
+    fit_ids = ids[n_val:]
+    return fit_ids, val_ids
 
 
 def _extract_normalized_expression(adata_obj, gene_names):
@@ -162,21 +177,23 @@ class HestExpressionDataset(Dataset):
 class BetaVAEPaper(nn.Module):
     """Paper-scale beta-VAE: two hidden layers (default 6000, 4000) instead
     of hpc_experiment_rna's single hidden//2-halving MLP, latent dim 200
-    (vs 16) -- matching the RNA-CDM paper's reported architecture, applied
-    to our own (smaller) selected gene panel."""
+    (vs 16) -- matching the RNA-CDM paper's reported architecture
+    (confirmed directly from the paper's Methods: BatchNorm between
+    layers, LeakyReLU activation), applied to our own (larger, QC-only)
+    selected gene panel."""
 
     def __init__(self, input_dim, hidden1=6000, hidden2=4000, latent_dim=200):
         super().__init__()
         self.latent_dim = latent_dim
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden1), nn.SiLU(),
-            nn.Linear(hidden1, hidden2), nn.SiLU(),
+            nn.Linear(input_dim, hidden1), nn.BatchNorm1d(hidden1), nn.LeakyReLU(),
+            nn.Linear(hidden1, hidden2), nn.BatchNorm1d(hidden2), nn.LeakyReLU(),
         )
         self.fc_mu = nn.Linear(hidden2, latent_dim)
         self.fc_logvar = nn.Linear(hidden2, latent_dim)
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, hidden2), nn.SiLU(),
-            nn.Linear(hidden2, hidden1), nn.SiLU(),
+            nn.Linear(latent_dim, hidden2), nn.BatchNorm1d(hidden2), nn.LeakyReLU(),
+            nn.Linear(hidden2, hidden1), nn.BatchNorm1d(hidden1), nn.LeakyReLU(),
             nn.Linear(hidden1, input_dim),
         )
 
