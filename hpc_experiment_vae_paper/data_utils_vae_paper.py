@@ -51,19 +51,21 @@ def _extract_normalized_expression(adata_obj, gene_names):
     return np.log1p(normalized)
 
 
-def select_highly_variable_genes(hest_dir, sample_ids, cancer_type=CANCER_TYPE,
-                                  min_cells_frac=0.01, min_mean=0.0125, max_mean=3, min_disp=0.5):
-    """Standard scanpy highly-variable-gene selection (flavor='seurat', the
-    field's common default) over all spots in the given (train-split)
-    WSIs' full transcriptome, after library-size normalization + log1p.
+def select_qc_passed_genes(hest_dir, sample_ids, cancer_type=CANCER_TYPE, min_cells_frac=0.01):
+    """Standard scanpy QC filtering only (sc.pp.filter_genes, min_cells as a
+    fraction of total spots) over all spots in the given (train-split)
+    WSIs' full transcriptome -- NO highly-variable-gene cutoff on top.
 
-    The resulting panel SIZE is whatever this standard procedure yields --
-    NOT forced to any particular target (e.g. the paper's 17,655, which by
-    the paper's own wording was itself just whatever their own
-    preprocessing happened to leave them with, not a chosen target -- see
-    README). We'd rather apply a standard, defensible method and report
-    whatever gene count it produces, than force-fit our panel size to
-    theirs.
+    Measured on our data: an HVG dispersion cutoff (flavor='seurat',
+    default thresholds) kept only 2,913/14,166 QC-passed genes, but those
+    2,913 captured just 22% of total expression variance -- throwing away
+    too much real signal for a generative model (as opposed to a
+    clustering/visualization use case, where HVG selection is standard).
+    So this function applies only the (near-lossless: QC filtering alone
+    keeps 99.9% of total raw counts) QC step, and leaves the VAE's own
+    bottleneck (the latent_dim) to do the actual compression -- same
+    philosophy as the paper feeding its VAE a large, only lightly
+    filtered gene set.
     """
     import scanpy as sc
 
@@ -85,16 +87,9 @@ def select_highly_variable_genes(hest_dir, sample_ids, cancer_type=CANCER_TYPE,
 
     min_cells = max(1, int(min_cells_frac * pooled.n_obs))
     sc.pp.filter_genes(pooled, min_cells=min_cells)
-    print(f"After filter_genes(min_cells={min_cells}): {pooled.n_vars} genes", flush=True)
+    print(f"After filter_genes(min_cells={min_cells}): {pooled.n_vars} genes kept", flush=True)
 
-    sc.pp.normalize_total(pooled, target_sum=NORMALIZE_TARGET_SUM)
-    sc.pp.log1p(pooled)
-    sc.pp.highly_variable_genes(pooled, flavor="seurat", min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
-
-    selected = pooled.var_names[pooled.var["highly_variable"]].tolist()
-    print(f"Selected {len(selected)} highly-variable genes "
-          f"(scanpy 'seurat' flavor, min_mean={min_mean}, max_mean={max_mean}, min_disp={min_disp})", flush=True)
-    return selected
+    return pooled.var_names.tolist()
 
 
 def load_gene_panel(panel_path):

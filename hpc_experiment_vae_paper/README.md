@@ -11,9 +11,9 @@ experiment once this VAE is validated).
 |---|---|---|---|---|
 | `hpc_experiment_rna`'s VAE | 50 | 128 | 16 | ~19.4K |
 | Paper (RNA-CDM) | 17,655 | 6,000 → 4,000 | 200 | ~282M |
-| **This experiment** | **2,913** (see below) | **configurable, default 6,000 → 4,000** | **configurable, default 200** | **~56M at this gene count** |
+| **This experiment** | **14,166** (see below) | **configurable, default 6,000 → 4,000** | **configurable, default 200** | **~220.4M at this gene count** |
 
-## Gene panel: standard method, not a forced target
+## Gene panel: QC only, no HVG cutoff -- and why
 
 The paper's 17,655 genes were themselves just whatever **their** own
 preprocessing happened to leave them with ("these pre-processing steps
@@ -21,20 +21,26 @@ left us with a total of 17,655 genes") -- not a number they deliberately
 targeted. Since there's no published list of exactly which genes those
 are, and we only have **spatial** (per-spot) transcriptomics rather than
 their **bulk** (per-patient) data, forcing our own panel to that exact
-size would just be cosmetic. Instead, `select_genes.py` applies scanpy's
-**standard** highly-variable-gene procedure (`flavor='seurat'`, the
-field's common default: `sc.pp.filter_genes` + `sc.pp.highly_variable_genes`
-with default `min_mean=0.0125, max_mean=3, min_disp=0.5`) to the pooled
-CCRCC train-split spots, and reports whatever gene count results.
+size would just be cosmetic. `select_genes.py` instead applies scanpy's
+standard QC filter (`sc.pp.filter_genes`, min_cells as 1% of spots) and
+nothing else.
 
-**Result on our data**: starting from 17,943 genes common to all 20
-train WSIs (not the full ~36,601 -- several WSIs are each missing some
-genes), `filter_genes(min_cells=1%)` leaves 14,166, and the standard HVG
-threshold selects **2,913** -- noticeably *smaller* than the paper's
-17,655, not larger. This isn't a choice; it's what the standard
-procedure yields on our noisier, sparser spot-level data (few UMIs/spot,
-lots of zeros) versus the paper's deep, pooled bulk sequencing. A fully
-honest, non-cherry-picked number.
+**We tried an HVG dispersion cutoff first** (`flavor='seurat'`, scanpy's
+common default thresholds) and measured how much it throws away: from
+17,943 genes common to all 20 train WSIs (not the full ~36,601 -- several
+WSIs are each missing some genes), `filter_genes` alone leaves 14,166
+while keeping **99.9% of total raw UMI counts** (i.e. near-lossless --
+the dropped genes are essentially undetected noise). The HVG cutoff on
+top of that keeps only 2,913/14,166 genes, but those genes capture just
+**22% of total expression variance** -- throwing away ~78% of the signal,
+too lossy for a generative model's conditioning input (HVG selection is
+standard for clustering/visualization, where you *want* to discard
+redundant/low-signal genes, but that's not our use case here). So we
+kept all 14,166 QC-passed genes and let the VAE's own bottleneck
+(`latent_dim`) do the real compression -- the same philosophy as the
+paper feeding its VAE a large, only lightly filtered gene set.
+`select_qc_passed_genes` in `data_utils_vae_paper.py` still has the
+numbers from both approaches in its docstring.
 
 ## Architecture
 
@@ -42,10 +48,10 @@ honest, non-cherry-picked number.
 `hpc_experiment_rna`'s `BetaVAE`, but with independently configurable
 `hidden1`/`hidden2`/`latent_dim` (defaults 6000/4000/200, vs. the single
 `hidden_dim` the small VAE halves internally). `vae_loss` (recon MSE + β·KL)
-is unchanged. At 2,913 input genes (vs. the paper's 17,655), the encoder's
-first layer is `2913 × 6000 ≈ 17.5M` weights instead of `17655 × 6000 ≈ 106M`
--- total model ~56M params, not ~282M -- which meaningfully changes the
-overfitting-risk discussion below.
+is unchanged. At 14,166 input genes the model is **~220.4M params**
+(measured directly, not estimated) -- much closer to the paper's ~282M
+than the earlier (abandoned) HVG-filtered estimate of ~56M, and the
+overfitting-risk discussion below should be read with that in mind.
 
 ## Pipeline
 
@@ -70,14 +76,15 @@ Results land in `/opt/storage/users/${USER}/experiments/hest-vae-paper/`.
 
 ## Settings to decide together before running at scale
 
-With the gene count now at 2,913 (not 17,655), the overfitting-risk
-picture is less extreme than originally worried, but there are still
-open decisions before submitting `job_train_vae_paper.sh` for real:
+At ~220.4M params trained on ~56K training spots, this is a genuinely
+different regime from every other experiment in this repo so far --
+nearly a 4:1 param-to-example ratio. Things worth deciding before
+submitting `job_train_vae_paper.sh` for real:
 
-1. **Overfitting risk**: ~56M params trained on ~56K spots is still a
-   roughly 1:1 param-to-example ratio -- may still want weight decay or a
-   smaller hidden/latent size, though far less dire than at the original
-   17,655-gene/282M-param estimate.
+1. **Overfitting risk**: real and significant at this ratio. Likely
+   needs weight decay and/or dropout; may still be worth considering a
+   smaller `hidden1`/`hidden2` (not the gene panel) if early runs show
+   clear overfitting (train loss falling, held-out reconstruction not).
 2. **β (posterior collapse)**: `hpc_experiment_rna`'s VAE needed β=0.01
    (not the paper's reported β≈0.005) to avoid posterior collapse at a
    much smaller scale -- unclear whether that transfers to 200 latent
@@ -85,9 +92,9 @@ open decisions before submitting `job_train_vae_paper.sh` for real:
    epoch 0, same diagnostic as before.
 3. **Batch size / GPU**: `--batch-size 256` is just inherited from the
    small VAE's default and hasn't been benchmarked at this param count.
-   At ~56M params this is far less likely to need anakin/luke than the
-   original 282M estimate -- yoda is probably sufficient, to be confirmed
-   by an actual benchmark run.
+   At ~220M params this is back in anakin/luke territory (see repo root
+   README for that access request) rather than comfortably fitting yoda
+   -- needs an actual benchmark run to confirm either way.
 4. **Epochs**: 50 is the small VAE's default, not benchmarked here either
    -- convergence behavior at this scale is unknown until we run it.
 

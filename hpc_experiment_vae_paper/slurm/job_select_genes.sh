@@ -7,11 +7,11 @@
 set -e  # propagate python/sbatch-step failures -- without this, a crashed
         # job falls through to cp -a below and SLURM reports false success
 
-# CPU-only -- no GPU line, this is a scanpy preprocessing pass (standard
-# HVG selection) over the full ~36,601-gene transcriptome for the CCRCC
-# train-split WSIs, not a model. Run once; the resulting gene panel
-# (whatever size it comes out to -- NOT forced to 17,655, see README) is
-# then fixed for train_vae_paper.py.
+# CPU-only -- no GPU line, this is a scanpy QC-filtering pass (NO HVG
+# dispersion cutoff -- see README for why) over the full ~36,601-gene
+# transcriptome for the CCRCC train-split WSIs, not a model. Run once;
+# the resulting gene panel (whatever size it comes out to) is then fixed
+# for train_vae_paper.py.
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
