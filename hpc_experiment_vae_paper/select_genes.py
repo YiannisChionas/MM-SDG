@@ -1,11 +1,18 @@
-"""Step 0: select the top-K highly-variable genes (by default K=17,655, to
-match the RNA-CDM paper's VAE input size) from the CCRCC train-split WSIs'
-full ~36,601-gene transcriptome -- HEST-bench's own var_50genes.json panel
-is a small curated benchmark subset, not a stand-in for "most variable
-genes at paper scale".
+"""Step 0: select highly-variable genes from the CCRCC train-split WSIs'
+full ~36,601-gene transcriptome, using scanpy's standard HVG procedure
+(flavor='seurat', the field's common default) -- HEST-bench's own
+var_50genes.json panel is a small curated benchmark subset, not a
+stand-in for "highly variable genes" at paper scale.
 
-CPU-only (no model, just mean/variance accumulation over all spots) --
-run as its own lightweight job, no GPU needed. Saves the panel so
+The resulting panel size is NOT forced to the RNA-CDM paper's 17,655 --
+that number was itself just whatever the paper's own preprocessing left
+them with (their own wording), not a target they chose. We apply a
+standard, defensible selection method instead and report whatever gene
+count results; if it ends up being more or fewer than 17,655, that's
+fine -- see this experiment's README.
+
+CPU-only (no model, just scanpy preprocessing over pooled spots) -- run
+as its own lightweight job, no GPU needed. Saves the panel so
 train_vae_paper.py can be re-run deterministically against the exact same
 gene list.
 """
@@ -23,8 +30,11 @@ def main():
     parser.add_argument("--data-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--fold", type=int, default=0)
-    parser.add_argument("--top-k", type=int, default=17655)
-    parser.add_argument("--min-detection-frac", type=float, default=0.01)
+    parser.add_argument("--min-cells-frac", type=float, default=0.01,
+                         help="scanpy sc.pp.filter_genes min_cells, as a fraction of total spots")
+    parser.add_argument("--min-mean", type=float, default=0.0125, help="scanpy highly_variable_genes min_mean")
+    parser.add_argument("--max-mean", type=float, default=3.0, help="scanpy highly_variable_genes max_mean")
+    parser.add_argument("--min-disp", type=float, default=0.5, help="scanpy highly_variable_genes min_disp")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -35,7 +45,8 @@ def main():
 
     genes = select_highly_variable_genes(
         args.data_dir, train_ids, CANCER_TYPE,
-        top_k=args.top_k, min_detection_frac=args.min_detection_frac,
+        min_cells_frac=args.min_cells_frac, min_mean=args.min_mean,
+        max_mean=args.max_mean, min_disp=args.min_disp,
     )
 
     panel_path = out_dir / f"gene_panel_{len(genes)}.json"

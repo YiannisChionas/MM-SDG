@@ -31,9 +31,16 @@ mkdir -p ${EXP_DIR} ${PERSIST_DIR}
 
 cp -a ${PERSIST_DIR}/. ${EXP_DIR}/ 2>/dev/null || true
 
+GENE_PANEL=$(ls ${EXP_DIR}/gene_panel_*.json | head -1)
+if [ -z "${GENE_PANEL}" ]; then
+    echo "No gene_panel_*.json found in ${EXP_DIR} -- run job_select_genes.sh first." >&2
+    exit 1
+fi
+echo "Using gene panel: ${GENE_PANEL}"
+
 python3 ~/hest-vae-paper/train_vae_paper.py \
     --data-dir ${DATASET_DST} \
-    --gene-panel ${EXP_DIR}/gene_panel_17655.json \
+    --gene-panel ${GENE_PANEL} \
     --output-dir ${EXP_DIR} \
     --fold 0 \
     "$@"

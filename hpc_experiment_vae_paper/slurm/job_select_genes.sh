@@ -7,13 +7,15 @@
 set -e  # propagate python/sbatch-step failures -- without this, a crashed
         # job falls through to cp -a below and SLURM reports false success
 
-# CPU-only -- no GPU line, this is a mean/variance accumulation pass over
-# the full ~36,601-gene transcriptome for the CCRCC train-split WSIs, not
-# a model. Run once; the resulting gene panel is then fixed for
-# train_vae_paper.py.
+# CPU-only -- no GPU line, this is a scanpy preprocessing pass (standard
+# HVG selection) over the full ~36,601-gene transcriptome for the CCRCC
+# train-split WSIs, not a model. Run once; the resulting gene panel
+# (whatever size it comes out to -- NOT forced to 17,655, see README) is
+# then fixed for train_vae_paper.py.
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
+pip install -q scanpy  # not part of the base env yet
 
 MYDATASET="hest-bench"
 DATASET_DST=/var/local/storage/${USER}/${MYDATASET}
@@ -29,7 +31,6 @@ python3 ~/hest-vae-paper/select_genes.py \
     --data-dir ${DATASET_DST} \
     --output-dir ${EXP_DIR} \
     --fold 0 \
-    --top-k 17655 \
     "$@"
 
 cp -a ${EXP_DIR}/. ${PERSIST_DIR}/

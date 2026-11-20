@@ -1,17 +1,17 @@
 """Shared dataset + model definitions for the paper-scale beta-VAE
 experiment (CCRCC only). Matches the architecture scale reported in the
-RNA-CDM paper (Carrillo-Perez et al.): 17,655 genes in, two hidden layers
-of 6,000 and 4,000, latent dim 200 -- versus our existing
-hpc_experiment_rna's 50 genes / 128 hidden / 16 latent.
+RNA-CDM paper (Carrillo-Perez et al.): two hidden layers of 6,000 and
+4,000, latent dim 200 -- versus our existing hpc_experiment_rna's 50
+genes / 128 hidden / 16 latent. Gene panel size is NOT forced to the
+paper's 17,655 -- see select_highly_variable_genes below.
 
 HEST-bench's own var_50genes.json panel is a small curated benchmark
-panel, not a stand-in for "most variable genes" at paper scale, so this
+panel, not a stand-in for "highly variable genes" at paper scale, so this
 module selects its OWN larger gene panel directly from the data (see
 select_genes.py) rather than reusing that file. Self-contained (not
 imported across experiment folders), matching this repo's convention.
 """
 
-import glob
 import json
 import os
 
@@ -52,58 +52,48 @@ def _extract_normalized_expression(adata_obj, gene_names):
 
 
 def select_highly_variable_genes(hest_dir, sample_ids, cancer_type=CANCER_TYPE,
-                                  top_k=17655, min_detection_frac=0.01):
-    """Rank ALL genes (not just the var_50genes.json panel) by variance of
-    their library-size-normalized + log1p expression across every spot in
-    the given (train-split) WSIs, after dropping genes barely detected in
-    this cohort. Returns the top_k gene names, sorted by descending
-    variance. This is OUR OWN gene-selection criterion (there is no public
-    "which 17,655 genes" list from the paper to reproduce exactly) --
-    chosen to match the paper's panel SIZE, not its exact identity."""
-    # Pass 1: not every WSI's adata necessarily carries the exact same gene
-    # set (seen in practice -- e.g. one WSI missing 'MIR1302-2HG' that others
-    # have), so take the intersection across all WSIs first rather than
-    # assuming the first WSI's gene list is universal.
-    common_genes = None
-    adatas = {}
+                                  min_cells_frac=0.01, min_mean=0.0125, max_mean=3, min_disp=0.5):
+    """Standard scanpy highly-variable-gene selection (flavor='seurat', the
+    field's common default) over all spots in the given (train-split)
+    WSIs' full transcriptome, after library-size normalization + log1p.
+
+    The resulting panel SIZE is whatever this standard procedure yields --
+    NOT forced to any particular target (e.g. the paper's 17,655, which by
+    the paper's own wording was itself just whatever their own
+    preprocessing happened to leave them with, not a chosen target -- see
+    README). We'd rather apply a standard, defensible method and report
+    whatever gene count it produces, than force-fit our panel size to
+    theirs.
+    """
+    import scanpy as sc
+
+    adatas = []
     for sample_id in sample_ids:
         adata_path = os.path.join(hest_dir, cancer_type, "adata", f"{sample_id}.h5ad")
         if not os.path.exists(adata_path):
             print(f"[warn] missing adata for {sample_id}, skipping")
             continue
         a = ad.read_h5ad(adata_path)
-        adatas[sample_id] = a
-        this_genes = set(a.var_names)
-        common_genes = this_genes if common_genes is None else (common_genes & this_genes)
-    gene_names = np.array(sorted(common_genes))
-    print(f"Common genes across all {len(adatas)} train WSIs: {len(gene_names)}", flush=True)
+        a.obs_names = [f"{sample_id}_{bc}" for bc in a.obs_names]  # avoid barcode collisions across WSIs
+        adatas.append(a)
 
-    # Pass 2: accumulate mean/variance/detection stats over that common set.
-    sum_x = np.zeros(len(gene_names), dtype=np.float64)
-    sum_x2 = np.zeros(len(gene_names), dtype=np.float64)
-    n_detected = np.zeros(len(gene_names), dtype=np.int64)
-    n_total = 0
-    for sample_id, a in adatas.items():
-        expr = _extract_normalized_expression(a, gene_names)  # (n_spots, n_genes)
-        sum_x += expr.sum(axis=0)
-        sum_x2 += (expr ** 2).sum(axis=0)
-        n_detected += (expr > 0).sum(axis=0)
-        n_total += expr.shape[0]
-        print(f"{sample_id}: {expr.shape[0]} spots", flush=True)
+    # join="inner": not every WSI's adata necessarily carries the exact same
+    # gene set (seen in practice -- e.g. one WSI missing 'MIR1302-2HG' that
+    # others have), so pool over the intersection.
+    pooled = ad.concat(adatas, join="inner")
+    print(f"Pooled {pooled.n_obs} spots x {pooled.n_vars} common genes across {len(adatas)} train WSIs", flush=True)
 
-    mean = sum_x / n_total
-    var = sum_x2 / n_total - mean ** 2
-    detection_frac = n_detected / n_total
+    min_cells = max(1, int(min_cells_frac * pooled.n_obs))
+    sc.pp.filter_genes(pooled, min_cells=min_cells)
+    print(f"After filter_genes(min_cells={min_cells}): {pooled.n_vars} genes", flush=True)
 
-    keep = detection_frac >= min_detection_frac
-    print(f"Genes passing min_detection_frac={min_detection_frac}: {keep.sum()}/{len(gene_names)}", flush=True)
+    sc.pp.normalize_total(pooled, target_sum=NORMALIZE_TARGET_SUM)
+    sc.pp.log1p(pooled)
+    sc.pp.highly_variable_genes(pooled, flavor="seurat", min_mean=min_mean, max_mean=max_mean, min_disp=min_disp)
 
-    kept_genes = gene_names[keep]
-    kept_var = var[keep]
-    order = np.argsort(-kept_var)
-    top_k = min(top_k, len(kept_genes))
-    selected = kept_genes[order[:top_k]].tolist()
-    print(f"Selected top {len(selected)} genes by variance", flush=True)
+    selected = pooled.var_names[pooled.var["highly_variable"]].tolist()
+    print(f"Selected {len(selected)} highly-variable genes "
+          f"(scanpy 'seurat' flavor, min_mean={min_mean}, max_mean={max_mean}, min_disp={min_disp})", flush=True)
     return selected
 
 
