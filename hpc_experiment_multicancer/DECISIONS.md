@@ -208,36 +208,34 @@ whether the `patient` field is populated for every one of its **selected**
 WSIs; if so it splits by unique patient (keeping all of a patient's WSIs
 on one side), otherwise it falls back to a WSI-level split for that type.
 
-**Checked directly on our final 50 selected WSIs** (not the broader
-108-candidate pool, which is a different, noisier picture -- e.g. COAD's
-full 50-sample pool had ~5 unique patients across *some* rows, but the
+**Checked directly on our final 47 selected WSIs** (not the broader
+candidate pool, which is a different, noisier picture -- e.g. COAD's
+full candidate pool had some patient info across *some* rows, but the
 specific 10 we selected for balance turned out to all have the field
 empty):
 
-| Type | Patient info in our 10 selected WSIs |
+| Type | Patient info in our final selected WSIs |
 |---|---|
 | COAD | empty -- WSI-level fallback |
 | SCCRCC | 10 unique patients (1.00 WSI/patient) -- patient-level split |
 | EPM | 9 unique patients (1.11 WSI/patient) -- patient-level split |
-| LIHB | empty -- WSI-level fallback |
+| PRAD | empty -- WSI-level fallback |
 | IDC | empty -- WSI-level fallback |
 
-So **3 of 5 types** (COAD, LIHB, IDC) fall back to WSI-level splitting in
-practice, not just LIHB as originally thought. The split function itself
-needed no change for this -- it already checks per-type, not hardcoded
-to LIHB. This is a real, accepted limitation for those 3 types: a
-WSI-level split can't rule out two sections from the same patient landing
-on opposite sides, but there's no way to do better without patient IDs
-that HEST doesn't provide for these rows.
+So **3 of 5 types** (COAD, PRAD, IDC) fall back to WSI-level splitting in
+practice. The split function itself needed no change for this -- it
+already checks per-type, not hardcoded to any specific type. This is a
+real, accepted limitation for those 3 types: a WSI-level split can't
+rule out two sections from the same patient landing on opposite sides,
+but there's no way to do better without patient IDs that HEST doesn't
+provide for these rows.
 
 Implemented in `train_vae_multicancer.py` (used for both the outer
 train/test split and the inner train/val split for early stopping).
 Smoke-tested locally (no patient leakage where patient-level split
-applies; valid splits from the WSI-level fallback).
-
-(Earlier version of this note incorrectly said only LIHB needed the
-fallback -- corrected after checking the real selected-WSI data instead
-of assuming from the broader candidate-pool survey.)
+applies; valid splits from the WSI-level fallback). Re-verified against
+the final PRAD-based selection (same pattern as the LIHB-based one:
+2 of 5 types have usable patient info, 3 don't).
 
 ## Open / not yet decided
 
