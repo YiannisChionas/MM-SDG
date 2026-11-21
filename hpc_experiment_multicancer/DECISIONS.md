@@ -82,6 +82,16 @@ Side effect: this also improves cross-type balance on its own (range
 1.41x -> 1.27x), without us doing anything extra -- it's just a
 consequence of applying the paper's own rule.
 
+**How the 4,000 are chosen (for the 13 WSIs that exceed it)**: plain
+uniform random subsampling without replacement, over the WSI's already
+extractable spots (in-tissue + crop window fits), fixed seed=0 applied
+independently per WSI (`extract_patches.py`'s
+`np.random.RandomState(seed).choice(..., replace=False)`). No
+stratification by spatial location, tissue morphology, or expression
+value -- matches the paper's own wording exactly ("maximum of randomly
+chosen 4000 tiles per slide"), and is deterministic/reproducible given
+the same seed.
+
 ## 6. No deliberate further truncation to force equal counts per cancer type
 
 Checked the paper: it does **not** balance training-set tile counts
