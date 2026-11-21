@@ -74,6 +74,7 @@ def main():
 
         results.append({
             "id": wsi_id, "oncotree_code": row["oncotree_code"],
+            "patient": row.get("patient"),
             "pixel_size_um_estimated": px_size, "crop_px": crop_px,
             "raw_spots_under_tissue": raw_spots, "extractable_spots": extractable,
         })
