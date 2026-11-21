@@ -125,18 +125,60 @@ exactly what we already decided for the CCRCC-only paper-scale VAE
 apply `sc.pp.filter_genes` only (no highly-variable-gene cutoff, since
 that was measured to discard ~78% of expression variance on our data).
 
-**Status**: not yet run for this 5-cancer-type pool -- needs its own
-gene-selection pass (common genes across these 5 types specifically, not
-reusing the CCRCC-only 14,166-gene panel).
+**Status**: script written (`select_genes_multicancer.py`), not run yet --
+pending a free job slot.
+
+## 9. Train/val/test split -- RESOLVED (patient-level where possible, WSI-level fallback)
+
+`data_utils_multicancer.split_train_test_wsis` checks, per cancer type,
+whether the `patient` field is populated for every one of its **selected**
+WSIs; if so it splits by unique patient (keeping all of a patient's WSIs
+on one side), otherwise it falls back to a WSI-level split for that type.
+
+**Checked directly on our final 50 selected WSIs** (not the broader
+108-candidate pool, which is a different, noisier picture -- e.g. COAD's
+full 50-sample pool had ~5 unique patients across *some* rows, but the
+specific 10 we selected for balance turned out to all have the field
+empty):
+
+| Type | Patient info in our 10 selected WSIs |
+|---|---|
+| COAD | empty -- WSI-level fallback |
+| SCCRCC | 10 unique patients (1.00 WSI/patient) -- patient-level split |
+| EPM | 9 unique patients (1.11 WSI/patient) -- patient-level split |
+| LIHB | empty -- WSI-level fallback |
+| IDC | empty -- WSI-level fallback |
+
+So **3 of 5 types** (COAD, LIHB, IDC) fall back to WSI-level splitting in
+practice, not just LIHB as originally thought. The split function itself
+needed no change for this -- it already checks per-type, not hardcoded
+to LIHB. This is a real, accepted limitation for those 3 types: a
+WSI-level split can't rule out two sections from the same patient landing
+on opposite sides, but there's no way to do better without patient IDs
+that HEST doesn't provide for these rows.
+
+Implemented in `train_vae_multicancer.py` (used for both the outer
+train/test split and the inner train/val split for early stopping).
+Smoke-tested locally (no patient leakage where patient-level split
+applies; valid splits from the WSI-level fallback).
+
+(Earlier version of this note incorrectly said only LIHB needed the
+fallback -- corrected after checking the real selected-WSI data instead
+of assuming from the broader candidate-pool survey.)
 
 ## Open / not yet decided
 
-- VAE architecture settings for this 5-cancer-type pool (may differ from
-  `hpc_experiment_vae_paper`'s CCRCC-only settings once trained on a
-  different, larger, multi-type gene panel/dataset).
-- Patient-level vs WSI-level train/val/test split -- LIHB's `patient`
-  metadata field was found empty for all its rows during the earlier
-  oncotree survey, so patient-level splitting may not be possible for
-  that type specifically; needs a fallback (WSI-level) for LIHB.
+- **VAE architecture settings for this 5-cancer-type pool**: the
+  architecture/hyperparameters themselves are already decided (same
+  paper-matched recipe as `hpc_experiment_vae_paper`: BatchNorm+LeakyReLU,
+  beta=0.005, 6000/4000/200, lr=3e-3+warmup/cosine, early stopping --
+  `BetaVAEPaper` in `data_utils_multicancer.py` is a direct copy). What's
+  NOT yet validated is whether these settings (tuned/reported for the
+  paper's own data, not ours) actually behave well at this scale/pool --
+  posterior collapse, convergence speed, overfitting -- which can only be
+  checked by actually running it.
+- **Batch size / partition feasibility on anakin/luke**: never actually
+  benchmarked. Needs a real run to confirm.
 - Diffusion model settings (architecture, conditioning mechanism, cascade
-  stages) for this multi-cancer setup.
+  stages) for this multi-cancer setup -- not started at all yet (VAE
+  first).
