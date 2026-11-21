@@ -43,51 +43,85 @@ required filter in every selection script in `hest_dataset_prep/`
 `estimate_adata_size.py`), not just `st_technology`/`oncotree_code`.
 Never pick a cancer type without checking this column first.
 
-**Cleanup**: the 10 mouse LIHB `.h5` patch files (~17GB, extracted
-before this was caught) need deleting from
-`/opt/storage/datasets/HEST/patches_multicancer/` -- shared cluster
-storage, no reason to keep data we can't use.
+**Cleanup**: done -- the 10 mouse LIHB `.h5`/`.h5ad` files were deleted
+from `/opt/storage/datasets/HEST/` (`patches_multicancer/` and `st/`).
 
-**NOTE on everything below**: sections 2-9 still describe the numbers
-from the LIHB-based selection (WSI picks, patch counts, 4K-cap totals,
-upsampling %, patient-split results). These need recomputing for PRAD
--- re-running `select_wsis.py` -> `extract_patches.py` ->
-`select_genes_multicancer.py` -- before the numbers below are trusted.
-Will be updated with real PRAD numbers once that's done, not guessed.
+### 1c. Second bug found the same way: one targeted-panel WSI (TENX28) collapsed the gene panel to 1,064
 
-## 2. 10 WSIs per cancer type, selected to balance physical tissue coverage
+After switching to PRAD and re-running gene selection, the cross-type
+intersection came back as only **1,064 genes** -- still far too small
+(for comparison, intersecting just one representative WSI per type gave
+~17,311). Checked `n_vars` for all 47 selected WSIs individually: **one
+COAD WSI, `TENX28`, has only 1,142 genes** (a targeted/custom probe
+panel, not full transcriptome) vs. 17,943-36,601 for every other WSI.
+A single such outlier anywhere in the pool is enough to collapse a
+join='inner' intersection, regardless of how good the other 46 WSIs are.
 
-For types with >10 Visium samples (COAD, SCCRCC, EPM), the 10 WSIs whose
-patch count is closest to the overall cross-type median are kept (not
-just the largest 10), so each type's total data volume ends up
-comparable rather than arbitrary.
+**Fix**: added `--min-genes` (default 15,000) to
+`compute_extractable_patches.py`, excluding any WSI below that
+threshold from the candidate pool entirely, before WSI selection ever
+sees it. TENX28 dropped, COAD's candidate pool went 50 -> 49, `select_wsis.py`
+picked a replacement automatically (closest-to-median among the
+remaining 49). Re-ran the full chain (recompute extractable patches ->
+reselect WSIs -> extract the newly-selected WSIs, clean up the
+no-longer-selected ones -> reselect genes).
+
+**Result**: common-gene intersection across all 5 types, all 47 WSIs:
+**14,368 genes** (close to the CCRCC-only pool's 14,166 from
+`hpc_experiment_vae_paper`, as expected now that the outlier is gone).
+
+**Lesson for later**: always sanity-check `n_vars` isn't a wild outlier
+across a to-be-pooled set before trusting an intersection -- a single
+bad WSI can silently wreck it, and the result (a very small but nonzero
+panel) doesn't look obviously broken unless you check.
+
+## 2. Up to 10 WSIs per cancer type, selected to balance physical tissue coverage
+
+For types with more candidates than the target (COAD, SCCRCC, EPM), the
+N WSIs whose patch count is closest to the overall cross-type median are
+kept (not just the largest N), so each type's total data volume ends up
+comparable rather than arbitrary. PRAD only has 7 human Visium
+candidates total, so all 7 are used.
 
 **Why**: avoids one type dominating total data volume just because more
 raw samples happened to be available for it.
+
+**Final selection (47 WSIs, after the LIHB and TENX28 fixes above)**:
+
+| Type | WSIs | Final patches (post-extraction, post-4K-cap) |
+|---|---|---|
+| COAD | 10 | 34,013 |
+| SCCRCC | 10 | 31,564 |
+| EPM | 10 | 27,515 |
+| PRAD | 7 | 26,733 |
+| IDC | 10 | 35,041 |
+| **Total** | **47** | **154,866** |
+
+Range 26,733-35,041 (1.31x) -- well balanced.
 
 ## 3. Patch size: 128µm physical size → resized to 256×256px (matches the paper exactly)
 
 256px is the paper's tile size; 0.5µm/px is the paper's target
 resolution; 256 × 0.5 = 128µm per side. Each WSI's own
 `pixel_size_um_estimated` determines the RAW pixel crop window needed to
-cover 128µm (e.g. ~464px for COAD at 0.276µm/px, ~144px for LIHB at
-~0.9µm/px); that raw crop is then resized (down or up) to the fixed
-256×256 tensor.
+cover 128µm (e.g. ~464px for COAD at 0.276µm/px, ~144-280px for
+PRAD/SCCRCC at ~0.61-0.46µm/px); that raw crop is then resized (down or
+up) to the fixed 256×256 tensor.
 
 **Why 128µm, not something larger**: an alternative (~236µm) was
-considered to avoid ANY upsampling (even for LIHB's worst case), but
-rejected -- it would degrade effective resolution for every WSI,
-including the already-good COAD/SCCRCC/IDC ones, just to fix 1-2 types.
-Not justifiable to make everything worse for everyone to fix a
-localized issue in 1-2 types.
+considered to avoid ANY upsampling (even for the coarsest-resolution
+type's worst case), but rejected -- it would degrade effective
+resolution for every WSI, including the already-good COAD/IDC ones,
+just to fix 1-2 types. Not justifiable to make everything worse for
+everyone to fix a localized issue in 1-2 types.
 
-**Known consequence, accepted as a documented limitation**: LIHB (and
-part of EPM) will always be upsampled (~1.6-1.8x) since their native
-resolution is coarser than 0.5µm/px -- those patches are genuinely
-lower-detail than COAD/SCCRCC/IDC's, reflecting real differences in
-source-cohort scanner resolution, not an artifact of our pipeline.
-Measured: COAD/SCCRCC/IDC mostly downsampled (safe); LIHB 100% of WSIs
-need upsampling; EPM ~86% of WSIs need upsampling.
+**Known consequence, accepted as a documented limitation**: PRAD and
+EPM will frequently be upsampled (~1.5-1.8x, their native resolution is
+coarser than 0.5µm/px) -- those patches are genuinely lower-detail than
+COAD/SCCRCC/IDC's, reflecting real differences in source-cohort scanner
+resolution, not an artifact of our pipeline. (Original measurement was
+against LIHB, since replaced by PRAD -- PRAD's resolution profile is
+similar: ~0.34-0.62µm/px, mostly needing upsampling like EPM did.)
 
 ## 4. Patch-to-expression correspondence is unaffected by crop size
 
@@ -103,23 +137,15 @@ than the spot itself; this isn't a new issue we introduced.
 
 ## 5. Max 4,000 tiles per WSI (random subsample when exceeded) -- matches the paper exactly
 
-Paper: *"a maximum of randomly chosen 4000 tiles per slide"*. Checked
-our 50 selected WSIs against this: **13/50 exceed 4,000** (concentrated
-in LIHB 5/10, IDC 6/10, SCCRCC 2/10; COAD and EPM are all under).
-Applying the cap changes per-type totals:
+Paper: *"a maximum of randomly chosen 4000 tiles per slide"*. On the
+final 47-WSI selection (COAD/SCCRCC/EPM/PRAD/IDC), several WSIs exceed
+4,000 (IDC and PRAD WSIs especially, given PRAD's coarser resolution
+means each WSI has fewer *unique* pixels but comparable spot density;
+see section 2's final table for post-cap per-type totals: 154,866 total
+across all 5 types, range 26,733-35,041, 1.31x).
 
-| Type | Before cap | After cap |
-|---|---|---|
-| COAD | 32,936 | 32,936 |
-| EPM | 27,515 | 27,515 |
-| IDC | 38,812 | 35,041 |
-| LIHB | 37,249 | 32,823 |
-| SCCRCC | 30,382 | 29,513 |
-| **Total** | 166,894 | **157,828** |
-
-Side effect: this also improves cross-type balance on its own (range
-1.41x -> 1.27x), without us doing anything extra -- it's just a
-consequence of applying the paper's own rule.
+The cap is applied during extraction itself (`extract_patches.py`), not
+as a separate post-processing step.
 
 **How the 4,000 are chosen (for the 13 WSIs that exceed it)**: plain
 uniform random subsampling without replacement, over the WSI's already
@@ -139,20 +165,23 @@ above; whatever totals result per type from slide counts is what they
 train on. The "10,000 tiles per cancer type" figure in the paper is for
 a *downstream evaluation* (HoverNet comparison), not training data.
 
-**Decision**: leave the post-cap per-type totals (27,515-35,041, 1.27x
+**Decision**: leave the post-cap per-type totals (26,733-35,041, 1.31x
 range) as-is for training -- matches the paper's own practice, avoids
 discarding real data for an artificial equal-count target.
 
 ## 7. Remaining per-type imbalance handled via weighted DataLoader sampling, not further truncation
 
 To avoid the model being subtly biased toward over-represented types
-during training (IDC/LIHB vs EPM), use weighted/balanced sampling in the
-DataLoader (e.g. inverse-frequency weights per cancer type) so each
+during training (IDC/COAD vs PRAD/EPM), use weighted/balanced sampling in
+the DataLoader (e.g. inverse-frequency weights per cancer type) so each
 training batch sees roughly equal representation across types, without
 physically discarding any patches.
 
-**Status**: not yet implemented -- to be added to the training script
-once it exists.
+**Status**: RESOLVED. `data_utils_multicancer.make_weighted_sampler`
+builds a `WeightedRandomSampler` with inverse cancer-type-frequency
+weights, used for the *fit* split's DataLoader in
+`train_vae_multicancer.py`. Smoke-tested locally: correctly rebalances
+a synthetic 10:1 class imbalance down to ~1:1 in the drawn samples.
 
 ## 8. Gene panel: common genes across the 5 cancer types + QC filter only, no HVG cutoff
 
@@ -164,8 +193,13 @@ exactly what we already decided for the CCRCC-only paper-scale VAE
 apply `sc.pp.filter_genes` only (no highly-variable-gene cutoff, since
 that was measured to discard ~78% of expression variance on our data).
 
-**Status**: script written (`select_genes_multicancer.py`), not run yet --
-pending a free job slot.
+**Status**: RESOLVED. Ran `select_genes_multicancer.py` on the final
+47-WSI pool (after the LIHB and TENX28 fixes above): common genes across
+all 5 types = 15,979, after `filter_genes(min_cells=1%)` = **14,368
+genes** -- comparable to the CCRCC-only pool's 14,166
+(`hpc_experiment_vae_paper`), confirming the two bugs above (mouse LIHB,
+targeted-panel TENX28) were the actual cause of the earlier near-zero
+intersections, not some fundamental incompatibility between platforms.
 
 ## 9. Train/val/test split -- RESOLVED (patient-level where possible, WSI-level fallback)
 
