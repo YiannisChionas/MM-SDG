@@ -15,6 +15,14 @@ budget compared to what spots_under_tissue alone would suggest.
 
 No image data is touched -- only spot pixel coordinates (from .h5ad)
 and each WSI's full-resolution dimensions (from the metadata CSV).
+
+Also excludes WSIs whose .h5ad has fewer than --min-genes genes
+(default 15,000): discovered that one COAD WSI (TENX28) has only 1,142
+genes -- a targeted/custom probe panel, not full transcriptome -- which
+on its own collapsed the 5-cancer-type gene intersection from ~17,311 to
+1,064 in select_genes_multicancer.py. A single low-coverage WSI pulled
+into the candidate pool is enough to wreck the downstream gene panel,
+so this filters them out before they ever reach WSI selection.
 """
 
 import argparse
@@ -34,6 +42,9 @@ def main():
     parser.add_argument("--patch-size-um", type=float, default=128.0,
                          help="Target physical patch size in micrometers (256px @ 0.5um/px = 128um)")
     parser.add_argument("--output-csv", type=str, required=True)
+    parser.add_argument("--min-genes", type=int, default=15000,
+                         help="Exclude WSIs whose .h5ad has fewer genes than this (targeted/custom "
+                              "panels, not full transcriptome) -- see module docstring for why")
     args = parser.parse_args()
 
     df = pd.read_csv(args.metadata_csv)
@@ -61,6 +72,11 @@ def main():
             continue
 
         a = ad.read_h5ad(adata_path)
+        if a.n_vars < args.min_genes:
+            print(f"[warn] {wsi_id} ({row['oncotree_code']}): only {a.n_vars} genes "
+                  f"(< --min-genes {args.min_genes}), likely a targeted panel -- excluding", flush=True)
+            continue
+
         in_tissue = a.obs["in_tissue"].to_numpy().astype(bool) if "in_tissue" in a.obs.columns else np.ones(a.n_obs, bool)
         rows_px = a.obs["pxl_row_in_fullres"].to_numpy()[in_tissue]
         cols_px = a.obs["pxl_col_in_fullres"].to_numpy()[in_tissue]
@@ -80,7 +96,7 @@ def main():
 
         results.append({
             "id": wsi_id, "oncotree_code": row["oncotree_code"],
-            "patient": row.get("patient"),
+            "patient": row.get("patient"), "n_vars": a.n_vars,
             "pixel_size_um_estimated": px_size, "crop_px": crop_px,
             "raw_spots_under_tissue": raw_spots, "extractable_spots": extractable,
         })
