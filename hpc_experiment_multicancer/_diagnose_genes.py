@@ -1,9 +1,11 @@
-import anndata as ad
 import pandas as pd
 
-df = pd.read_csv("/opt/storage/datasets/HEST/selected_wsis.csv")
+df = pd.read_csv("/opt/storage/datasets/HEST/HEST_v1_3_0.csv")
+visium = df[df["st_technology"] == "Visium"]
+target = visium[visium["oncotree_code"].isin(["COAD", "SCCRCC", "EPM", "LIHB", "IDC"])]
 
-for code, sub in df.groupby("oncotree_code"):
-    wsi_id = sub["id"].iloc[0]
-    a = ad.read_h5ad(f"/opt/storage/datasets/HEST/st/{wsi_id}.h5ad")
-    print(f"{code} (example {wsi_id}): n_vars={a.n_vars}, first 5 genes: {list(a.var_names[:5])}")
+print("species x oncotree_code (Visium, our 5 target types):")
+print(pd.crosstab(target["oncotree_code"], target["species"]))
+
+print("\nAll species values across the full Visium pool:")
+print(visium["species"].value_counts())
