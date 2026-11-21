@@ -10,9 +10,8 @@ for wsi_id, code in wsi_to_code.items():
     with h5py.File(path, "r") as f:
         n = f["img"].shape[0]
     totals[code] = totals.get(code, 0) + n
-    print(f"{wsi_id} ({code}): {n} patches")
 
-print("\n--- Per-type totals (final, post-extraction, post-4K-cap) ---")
+print("--- Per-type totals (final, post-extraction, post-4K-cap) ---")
 grand_total = 0
 for code, n in sorted(totals.items()):
     print(f"{code}: {n}")
