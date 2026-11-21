@@ -34,9 +34,15 @@ def main():
     for f in matched[:20]:
         print(" ", f)
 
-    # Get sizes via get_paths_info (batched)
+    # Get sizes via get_paths_info, chunked -- the API rejects too many
+    # paths in a single request (413 Payload Too Large above ~100s-1000s).
     print("\nFetching sizes for matched files...", flush=True)
-    infos = api.get_paths_info(repo_id=REPO_ID, repo_type="dataset", paths=matched)
+    infos = []
+    chunk_size = 100
+    for start in range(0, len(matched), chunk_size):
+        chunk = matched[start:start + chunk_size]
+        infos.extend(api.get_paths_info(repo_id=REPO_ID, repo_type="dataset", paths=chunk))
+        print(f"  {min(start + chunk_size, len(matched))}/{len(matched)}", flush=True)
     total_bytes = sum(i.size for i in infos if i.size)
     by_ext = {}
     for i in infos:
