@@ -1,5 +1,6 @@
-"""Select 10 WSIs per cancer type for our 5 target Visium cancer types
-(COAD, SCCRCC, EPM, LIHB, IDC), chosen to balance total patch count
+"""Select up to 10 WSIs per cancer type for our 5 target Visium cancer
+types (COAD, SCCRCC, EPM, PRAD, IDC -- PRAD only has 7 human candidates
+total, so it takes all of them), chosen to balance total patch count
 across types -- not just WSI count.
 
 Default --count-column is now `extractable_spots` (from
@@ -22,7 +23,7 @@ import argparse
 
 import pandas as pd
 
-TARGET_CODES = ["COAD", "SCCRCC", "EPM", "LIHB", "IDC"]
+TARGET_CODES = ["COAD", "SCCRCC", "EPM", "PRAD", "IDC"]
 
 
 def main():

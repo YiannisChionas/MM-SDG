@@ -6,15 +6,54 @@ re-derive "why did we choose X" later. Update this file whenever a new
 decision is made or an old one is revised (note the revision, don't just
 overwrite silently).
 
-## 1. Cancer types: COAD, SCCRCC, EPM, LIHB, IDC (not the paper's LUAD/KIRP/CESC/COAD/GBM)
+## 1. Cancer types: COAD, SCCRCC, EPM, PRAD, IDC (not the paper's LUAD/KIRP/CESC/COAD/GBM)
 
 The paper's own 5 (LUAD, KIRP, CESC, COAD, GBM) don't hold up against the
 real HEST-1k catalog: KIRP has 0 Visium samples, CESC has 1, GBM has 3-4.
 Replaced with the 5 oncotree codes with the most Visium samples instead:
-COAD (50), SCCRCC (24), EPM (14), LIHB (10), IDC (10).
+originally COAD (50), SCCRCC (24), EPM (14), LIHB (10), IDC (10).
 
 **Why**: can't reproduce what doesn't exist in the data; picking by
 actual sample availability is the only defensible alternative.
+
+### 1b. LIHB discovered to be 100% mouse -- replaced with PRAD
+
+After extraction, gene-panel selection across the pooled 50 WSIs came
+back with **zero common genes**. Diagnosis: LIHB's gene names
+(`Xkr4`, `Gm1992`, `Gm37381`, ...) are mouse (MGI) nomenclature, not
+human -- checked the metadata's `species` column directly: **all 10
+selected LIHB Visium WSIs are `Mus musculus`, 0 are `Homo sapiens`**.
+None of our selection scripts had ever filtered on species, only on
+`st_technology`/`oncotree_code` -- the oncotree code alone doesn't imply
+species, and HEST pools both human and mouse samples under the same
+disease codes.
+
+Re-surveyed Visium samples with `species == 'Homo sapiens'` required:
+COAD (50), SCCRCC (24), EPM (14), IDC (10), **PRAD (7)**, BLCA (6). PRAD
+chosen over BLCA: PRAD's estimated total patches after the 4,000/slide
+cap (~26,733) falls in the same range as our other 4 types (27k-39k);
+BLCA's (~6,217) would be 4-6x smaller than every other type, far worse
+imbalance than anything the weighted sampler is meant to fix.
+
+**Final 5**: COAD, SCCRCC, EPM, **PRAD**, IDC.
+
+**Fix applied going forward**: `species == 'Homo sapiens'` is now a
+required filter in every selection script in `hest_dataset_prep/`
+(`compute_extractable_patches.py`, `download_adata_only.py`,
+`estimate_adata_size.py`), not just `st_technology`/`oncotree_code`.
+Never pick a cancer type without checking this column first.
+
+**Cleanup**: the 10 mouse LIHB `.h5` patch files (~17GB, extracted
+before this was caught) need deleting from
+`/opt/storage/datasets/HEST/patches_multicancer/` -- shared cluster
+storage, no reason to keep data we can't use.
+
+**NOTE on everything below**: sections 2-9 still describe the numbers
+from the LIHB-based selection (WSI picks, patch counts, 4K-cap totals,
+upsampling %, patient-split results). These need recomputing for PRAD
+-- re-running `select_wsis.py` -> `extract_patches.py` ->
+`select_genes_multicancer.py` -- before the numbers below are trusted.
+Will be updated with real PRAD numbers once that's done, not guessed.
 
 ## 2. 10 WSIs per cancer type, selected to balance physical tissue coverage
 

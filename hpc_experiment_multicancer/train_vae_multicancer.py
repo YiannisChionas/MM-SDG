@@ -1,15 +1,16 @@
 """Train the paper-scale beta-VAE pooled across the 5 multi-cancer types
-(COAD, SCCRCC, EPM, LIHB, IDC) -- the multi-cancer analogue of
+(COAD, SCCRCC, EPM, PRAD, IDC) -- the multi-cancer analogue of
 hpc_experiment_vae_paper's CCRCC-only train_vae_paper.py. Same recipe
 matched to the paper's confirmed Methods (BatchNorm+LeakyReLU, beta=0.005,
 lr=3e-3 with warmup+cosine, up to 250 epochs with early stopping).
 
-Train/test split is per-patient where possible, WSI-level fallback for
-LIHB (see data_utils_multicancer.split_train_test_wsis). The *fit* split
-(for training, as opposed to the held-out early-stopping val split) uses
-a WeightedRandomSampler (inverse cancer-type frequency) so each batch
-sees roughly equal representation across types despite the post-4000-cap
-imbalance (COAD/IDC/LIHB have more spots than EPM/SCCRCC) -- DECISIONS.md #7.
+Train/test split is per-patient where possible, WSI-level fallback
+otherwise (checked per-type at runtime, see
+data_utils_multicancer.split_train_test_wsis and DECISIONS.md #9). The
+*fit* split (for training, as opposed to the held-out early-stopping val
+split) uses a WeightedRandomSampler (inverse cancer-type frequency) so
+each batch sees roughly equal representation across types despite the
+post-4000-cap imbalance -- DECISIONS.md #7.
 """
 
 import argparse

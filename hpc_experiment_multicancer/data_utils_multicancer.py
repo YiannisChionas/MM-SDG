@@ -1,6 +1,6 @@
 """Shared dataset + split + sampling utilities for the multi-cancer
 paper-scale beta-VAE (DECISIONS.md). Pools spots across the 5 selected
-cancer types (COAD, SCCRCC, EPM, LIHB, IDC), using the gene panel from
+cancer types (COAD, SCCRCC, EPM, PRAD, IDC), using the gene panel from
 select_genes_multicancer.py.
 
 Covers two open items from DECISIONS.md:
@@ -11,7 +11,9 @@ Covers two open items from DECISIONS.md:
 - Train/val/test split: split_train_test_wsis splits by PATIENT where
   the metadata's `patient` field is populated for every WSI of a given
   cancer type, falling back to a WSI-level split for types where it
-  isn't (LIHB, confirmed empty for all its rows in the HEST catalog).
+  isn't (checked per-type at runtime -- see DECISIONS.md #9 for which
+  types that applied to for the previous LIHB-based selection; PRAD
+  needs re-checking since it replaced LIHB).
 """
 
 import json
@@ -35,10 +37,13 @@ def split_train_test_wsis(selected_wsis_df, test_frac=0.2, seed=0):
 
     If the `patient` column is populated for every WSI of that type,
     splits by unique patient (so all WSIs/sections from the same patient
-    land in the same split -- avoids leakage, matters most for COAD,
-    whose 50 selected samples come from only ~5-10 unique patients).
-    Otherwise (confirmed: LIHB has an empty `patient` field for all its
-    rows) falls back to a WSI-level split for that type only.
+    land in the same split -- avoids leakage). Otherwise falls back to a
+    WSI-level split for that type only. Checked once on our actual
+    selected 50 WSIs (DECISIONS.md #9): SCCRCC and EPM have usable
+    patient info; COAD, LIHB (since replaced by PRAD) and IDC did not,
+    for the specific WSIs selected -- re-check whenever the selection
+    changes, the broader candidate pool's patient coverage doesn't
+    necessarily carry over to whichever WSIs end up selected.
     """
     rng = random.Random(seed)
     train_ids, test_ids = [], []

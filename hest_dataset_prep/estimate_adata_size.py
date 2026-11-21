@@ -18,8 +18,11 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.metadata_csv)
-    target_codes = ["COAD", "SCCRCC", "EPM", "LIHB", "IDC"]
-    visium = df[(df["st_technology"] == "Visium") & (df["oncotree_code"].isin(target_codes))]
+    target_codes = ["COAD", "SCCRCC", "EPM", "PRAD", "IDC"]
+    visium = df[
+        (df["st_technology"] == "Visium") & (df["oncotree_code"].isin(target_codes)) &
+        (df["species"] == "Homo sapiens")
+    ]
     ids = set(visium["id"].tolist())
     print(f"Candidate WSIs: {len(ids)}", flush=True)
 

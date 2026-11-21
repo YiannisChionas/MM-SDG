@@ -10,7 +10,7 @@ agnostic to patch size) with an extraction-aware count: at a fixed
 physical patch size, high-resolution WSIs (small pixel_size_um, e.g.
 COAD's ~0.276) need a LARGER raw-pixel crop window, so spots near the
 tissue/image edge are more likely to be excluded than for low-resolution
-WSIs (e.g. LIHB's ~0.89-0.92) -- shifting the effective per-type patch
+WSIs -- shifting the effective per-type patch
 budget compared to what spots_under_tissue alone would suggest.
 
 No image data is touched -- only spot pixel coordinates (from .h5ad)
@@ -24,7 +24,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-TARGET_CODES = ["COAD", "SCCRCC", "EPM", "LIHB", "IDC"]
+TARGET_CODES = ["COAD", "SCCRCC", "EPM", "PRAD", "IDC"]
 
 
 def main():
@@ -37,8 +37,14 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.metadata_csv)
-    visium = df[(df["st_technology"] == "Visium") & (df["oncotree_code"].isin(TARGET_CODES))].copy()
-    print(f"Candidate Visium WSIs: {len(visium)}", flush=True)
+    # species filter is a hard safety check -- LIHB was discovered to be
+    # entirely Mus musculus despite looking like a normal human cancer
+    # code, which silently produced a zero-gene-overlap pool downstream.
+    visium = df[
+        (df["st_technology"] == "Visium") & (df["oncotree_code"].isin(TARGET_CODES)) &
+        (df["species"] == "Homo sapiens")
+    ].copy()
+    print(f"Candidate Visium WSIs (Homo sapiens only): {len(visium)}", flush=True)
 
     results = []
     for _, row in visium.iterrows():
