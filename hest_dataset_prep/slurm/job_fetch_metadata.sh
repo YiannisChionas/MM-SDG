@@ -15,7 +15,7 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
 pip install -q fsspec huggingface_hub  # ensure hf:// read support
 
-OUT_DIR=/opt/storage/datasets/hest_full
+OUT_DIR=/opt/storage/datasets/HEST
 mkdir -p ${OUT_DIR}
 
 python3 ~/git/MM-SDG/hest_dataset_prep/fetch_metadata.py \

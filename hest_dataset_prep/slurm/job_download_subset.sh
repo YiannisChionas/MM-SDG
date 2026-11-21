@@ -14,7 +14,7 @@ set -e  # propagate python/sbatch-step failures -- without this, a crashed
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
 
-OUT_DIR=/opt/storage/datasets/hest_full
+OUT_DIR=/opt/storage/datasets/HEST
 mkdir -p ${OUT_DIR}
 
 python3 ~/git/MM-SDG/hest_dataset_prep/download_subset.py \
