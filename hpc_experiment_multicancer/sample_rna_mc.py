@@ -44,6 +44,10 @@ def main():
     parser.add_argument("--s-tmin", type=float, default=0.05)
     parser.add_argument("--s-tmax", type=float, default=50)
     parser.add_argument("--s-noise", type=float, default=1.003)
+    parser.add_argument("--weights", choices=["ema", "raw"], default="ema",
+                         help="ema matches the paper's Methods; raw is for debugging whether a given "
+                              "checkpoint's EMA has caught up yet (EMA decay has a ~1/(1-decay)-step "
+                              "time constant, so it lags the raw network early in training)")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -62,11 +66,10 @@ def main():
 
     model = RnaConditionedUnetMC(vae, image_size=args.image_size).to(device)
     diff_ckpt = torch.load(args.diffusion_checkpoint, map_location=device)
-    # Sample with the EMA weights, not the raw training network -- matches
-    # the paper's Methods (EMA network used for sampling).
-    model.net.load_state_dict(diff_ckpt["ema_state_dict"])
+    state_key = "ema_state_dict" if args.weights == "ema" else "model_state_dict"
+    model.net.load_state_dict(diff_ckpt[state_key])
     model.eval()
-    print(f"Loaded diffusion checkpoint from step {diff_ckpt['step']} (EMA weights)", flush=True)
+    print(f"Loaded diffusion checkpoint from step {diff_ckpt['step']} ({args.weights} weights)", flush=True)
 
     wsis_df = pd.read_csv(args.selected_wsis_csv)
     wsi_to_code = dict(zip(wsis_df["id"], wsis_df["oncotree_code"]))
