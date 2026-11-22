@@ -21,6 +21,19 @@ HEST_DIR=/opt/storage/datasets/HEST
 EXP_DIR=/opt/storage/users/${USER}/experiments/hest-vae-multicancer
 mkdir -p ${EXP_DIR}
 
+# Stage st/*.h5ad (expression; ~5.6GB) to this node's fast local scratch --
+# the VAE only ever reads expression, never patches_multicancer/ (images),
+# so that's the only heavy dir worth copying for this job. Avoids repeated
+# small-file reads over NFS during build_expr_index, which is suspected of
+# having contributed to a stuck/hung job before (SIGTERM during NFS I/O
+# wait). selected_wsis.csv and the gene panel are tiny -- read directly
+# from NFS, not worth copying.
+LOCAL_HEST=/var/local/storage/${USER}/HEST
+mkdir -p ${LOCAL_HEST}
+if [ ! -d ${LOCAL_HEST}/st ]; then
+    cp -a ${HEST_DIR}/st ${LOCAL_HEST}/st
+fi
+
 # Sort numerically by the gene-count suffix and take the LARGEST --
 # plain `ls | head -1` is alphabetical, so a stale gene_panel_multicancer_0.json
 # (or any small number) from an earlier broken run would always win over the
@@ -33,7 +46,7 @@ fi
 echo "Using gene panel: ${GENE_PANEL}"
 
 python3 ~/git/MM-SDG/hpc_experiment_multicancer/train_vae_multicancer.py \
-    --hest-dir ${HEST_DIR} \
+    --hest-dir ${LOCAL_HEST} \
     --selected-wsis-csv ${HEST_DIR}/selected_wsis.csv \
     --gene-panel ${GENE_PANEL} \
     --output-dir ${EXP_DIR} \
