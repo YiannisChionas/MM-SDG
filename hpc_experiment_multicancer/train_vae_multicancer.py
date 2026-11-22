@@ -2,7 +2,15 @@
 (COAD, SCCRCC, EPM, PRAD, IDC) -- the multi-cancer analogue of
 hpc_experiment_vae_paper's CCRCC-only train_vae_paper.py. Same recipe
 matched to the paper's confirmed Methods (BatchNorm+LeakyReLU, beta=0.005,
-lr=3e-3 with warmup+cosine, up to 250 epochs with early stopping).
+lr=3e-3 with warmup+cosine, batch_size=128, up to 250 epochs with early
+stopping).
+
+The cosine LR schedule's `total_epochs` is decoupled from the hard epoch
+cap (--epochs) via --lr-schedule-epochs: the first real run early-stopped
+at epoch 27 while the schedule was computed against 250 epochs, so the LR
+had barely decayed from its peak -- the model never reached an annealing
+regime. --lr-schedule-epochs gives the cosine decay a realistic budget
+regardless of where --epochs/--patience end up cutting training off.
 
 Train/test split is per-patient where possible, WSI-level fallback
 otherwise (checked per-type at runtime, see
@@ -64,10 +72,13 @@ def main():
                               "up front, so val_frac=0.25 of the remaining 80%% works out to exactly "
                               "60/20/20 train/val/test overall, matching the paper's split ratio.")
     parser.add_argument("--epochs", type=int, default=250)
-    parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--patience", type=int, default=40)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--warmup-epochs", type=int, default=10)
+    parser.add_argument("--lr-schedule-epochs", type=int, default=50,
+                         help="Epoch budget the cosine decay anneals over, separate from --epochs "
+                              "(the hard cap) -- see module docstring.")
     parser.add_argument("--hidden1", type=int, default=6000)
     parser.add_argument("--hidden2", type=int, default=4000)
     parser.add_argument("--latent-dim", type=int, default=200)
@@ -111,7 +122,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lr_lambda=lambda e: warmup_cosine_lambda(e, args.warmup_epochs, args.epochs),
+        optimizer, lr_lambda=lambda e: warmup_cosine_lambda(e, args.warmup_epochs, args.lr_schedule_epochs),
     )
 
     start_epoch = 0
