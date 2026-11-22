@@ -16,12 +16,14 @@ Covers two open items from DECISIONS.md:
   needs re-checking since it replaced LIHB).
 """
 
+import copy
 import json
 import os
 import random
 from collections import Counter
 
 import anndata as ad
+import h5py
 import numpy as np
 import pandas as pd
 import torch
@@ -211,3 +213,195 @@ def vae_loss(recon, x, mu, logvar, beta):
     recon_loss = F.mse_loss(recon, x, reduction="mean")
     kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
     return recon_loss + beta * kl, recon_loss, kl
+
+
+# ---------------------------------------------------------------------------
+# Stage-1 (RNA -> low-res image) diffusion: patch/expression pairing, the
+# conditioned UNet, EMA, and a Karras et al. (2022) sampler.
+# ---------------------------------------------------------------------------
+
+def build_patch_expr_index(hest_dir, wsi_ids, wsi_to_code, gene_names):
+    """For each WSI, match patches_multicancer/{id}.h5 patches to their real
+    gene expression (st/{id}.h5ad) via barcode. Returns a flat list of
+    (h5_path, local_patch_idx, expr_vector, cancer_type_code) tuples --
+    same barcode-matching pattern as hpc_experiment_rna's
+    build_patch_expr_index, generalized to pool across cancer types."""
+    index = []
+    for wsi_id in wsi_ids:
+        patches_path = os.path.join(hest_dir, "patches_multicancer", f"{wsi_id}.h5")
+        adata_path = os.path.join(hest_dir, "st", f"{wsi_id}.h5ad")
+        if not os.path.exists(patches_path) or not os.path.exists(adata_path):
+            print(f"[warn] missing files for {wsi_id}, skipping", flush=True)
+            continue
+
+        a = ad.read_h5ad(adata_path)
+        expr = _extract_normalized_expression(a, gene_names)
+        obs_name_to_row = {name: i for i, name in enumerate(a.obs_names)}
+        code = wsi_to_code[wsi_id]
+
+        with h5py.File(patches_path, "r") as f:
+            barcodes = f["barcode"][:]
+            n_patches = len(barcodes)
+
+        matched = 0
+        for local_idx in range(n_patches):
+            bc = barcodes[local_idx][0]
+            bc = bc.decode() if isinstance(bc, bytes) else str(bc)
+            row = obs_name_to_row.get(bc)
+            if row is None:
+                continue
+            index.append((patches_path, local_idx, expr[row].copy(), code))
+            matched += 1
+
+        print(f"{wsi_id} ({code}): matched {matched}/{n_patches} patches to expression", flush=True)
+
+    return index
+
+
+class HestMultiCancerPatchExpressionDataset(Dataset):
+    """For diffusion training/sampling: image + normalized expression vector
+    + cancer type code (code only used for logging/weighting, not fed to
+    the model -- matches the paper's un-conditioned-on-cancer-type design,
+    DECISIONS.md #7). Lazy .h5 loading, same pattern as data_utils_rna.py."""
+
+    def __init__(self, index, normalizer, image_size=64):
+        self.index = index
+        self.normalizer = normalizer
+        self.image_size = image_size
+        self._handles = {}
+
+    def __len__(self):
+        return len(self.index)
+
+    def _get_handle(self, path):
+        h = self._handles.get(path)
+        if h is None:
+            h = h5py.File(path, "r")
+            self._handles[path] = h
+        return h
+
+    def __getitem__(self, idx):
+        fp, local_idx, expr, code = self.index[idx]
+        f = self._get_handle(fp)
+        img = f["img"][local_idx]
+        t = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 127.5 - 1.0
+        t = F.interpolate(
+            t.unsqueeze(0), size=(self.image_size, self.image_size),
+            mode="bilinear", align_corners=False,
+        ).squeeze(0)
+
+        z = self.normalizer.transform(expr)
+        return t, torch.from_numpy(z.astype(np.float32)), code
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_handles"] = {}
+        return state
+
+
+class RnaConditionedUnetMC(nn.Module):
+    """UNet2DModel conditioned on the frozen multi-cancer beta-VAE's latent
+    embedding of the patch's real gene expression, broadcast as extra input
+    channels -- same pattern as hpc_experiment_rna's RnaConditionedUnet,
+    pointed at BetaVAEPaper (latent_dim=200) instead of the CCRCC-only
+    50-gene BetaVAE."""
+
+    def __init__(self, vae: BetaVAEPaper, image_size=64):
+        super().__init__()
+        from diffusers import UNet2DModel
+
+        self.vae = vae
+        for p in self.vae.parameters():
+            p.requires_grad_(False)
+        self.vae.eval()
+
+        latent_dim = vae.latent_dim
+        self.model = UNet2DModel(
+            sample_size=image_size,
+            in_channels=3 + latent_dim,
+            out_channels=3,
+            layers_per_block=2,
+            block_out_channels=(128, 128, 256, 256, 512, 512),
+            down_block_types=(
+                "DownBlock2D", "DownBlock2D", "DownBlock2D",
+                "DownBlock2D", "AttnDownBlock2D", "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D", "AttnUpBlock2D", "UpBlock2D",
+                "UpBlock2D", "UpBlock2D", "UpBlock2D",
+            ),
+        )
+
+    def encode_condition(self, expr_z):
+        with torch.no_grad():
+            mu, _ = self.vae.encode(expr_z)  # posterior mean -- deterministic conditioning
+        return mu
+
+    def forward(self, x, t, expr_z):
+        bs, ch, w, h = x.shape
+        cond = self.encode_condition(expr_z).view(bs, -1, 1, 1).expand(bs, -1, w, h)
+        return self.model(torch.cat((x, cond), dim=1), t).sample
+
+
+class EMA:
+    """Exponential moving average of a model's weights, tracked alongside
+    the training network -- matches the paper's Methods ("Two versions of
+    the model were maintained during training: i) the training network...
+    ii) the EMA network", with the EMA network used for sampling).
+
+    Only wraps model.model (the UNet2DModel's own parameters) since that's
+    the only trainable submodule of RnaConditionedUnetMC -- the VAE inside
+    it is frozen and never updated."""
+
+    def __init__(self, model, decay=0.9995):
+        self.decay = decay
+        self.shadow = copy.deepcopy(model.model).eval()
+        for p in self.shadow.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model):
+        for shadow_p, p in zip(self.shadow.parameters(), model.model.parameters()):
+            shadow_p.mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
+        for shadow_b, b in zip(self.shadow.buffers(), model.model.buffers()):
+            shadow_b.copy_(b)
+
+    def state_dict(self):
+        return self.shadow.state_dict()
+
+    def load_state_dict(self, state):
+        self.shadow.load_state_dict(state)
+
+
+def make_karras_sampler(ddpm_scheduler, num_inference_steps=40):
+    """Build a Karras et al. (2022, "Elucidating the Design Space of
+    Diffusion-Based Generative Models") sampler compatible with a UNet
+    trained the usual DDPM way (epsilon-prediction, via the given
+    DDPMScheduler's noise schedule) -- diffusers' HeunDiscreteScheduler
+    implements exactly this: the Karras sigma schedule plus a 2nd-order
+    Heun ODE solver, letting the SAME already-trained checkpoint sample
+    in ~40 steps instead of the full 1000-step DDPM ancestral chain.
+    No retraining needed -- this only changes inference, not the loss
+    the UNet was trained with."""
+    from diffusers import HeunDiscreteScheduler
+
+    sampler = HeunDiscreteScheduler.from_config(ddpm_scheduler.config, use_karras_sigmas=True)
+    sampler.set_timesteps(num_inference_steps)
+    return sampler
+
+
+@torch.no_grad()
+def karras_sample(model, sampler, expr_z, image_size, device):
+    """Run the Karras/Heun sampling loop for an RnaConditionedUnetMC-style
+    model (forward(x, t, expr_z) -> predicted noise). HeunDiscreteScheduler
+    sometimes evaluates the model twice per step (2nd-order correction), so
+    unlike plain DDPMScheduler sampling this does NOT always call the model
+    exactly len(sampler.timesteps) times -- scheduler.step() reports which
+    step it's in internally."""
+    bs = expr_z.shape[0]
+    x = torch.randn(bs, 3, image_size, image_size, device=device) * sampler.init_noise_sigma
+    for t in sampler.timesteps:
+        model_input = sampler.scale_model_input(x, t)
+        noise_pred = model(model_input, t, expr_z)
+        x = sampler.step(noise_pred, t, x).prev_sample
+    return x
