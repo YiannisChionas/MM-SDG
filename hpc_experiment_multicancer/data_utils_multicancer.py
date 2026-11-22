@@ -373,35 +373,74 @@ class EMA:
         self.shadow.load_state_dict(state)
 
 
-def make_karras_sampler(ddpm_scheduler, num_inference_steps=40):
-    """Build a Karras et al. (2022, "Elucidating the Design Space of
-    Diffusion-Based Generative Models") sampler compatible with a UNet
-    trained the usual DDPM way (epsilon-prediction, via the given
-    DDPMScheduler's noise schedule) -- diffusers' HeunDiscreteScheduler
-    implements exactly this: the Karras sigma schedule plus a 2nd-order
-    Heun ODE solver, letting the SAME already-trained checkpoint sample
-    in ~40 steps instead of the full 1000-step DDPM ancestral chain.
-    No retraining needed -- this only changes inference, not the loss
-    the UNet was trained with."""
-    from diffusers import HeunDiscreteScheduler
-
-    sampler = HeunDiscreteScheduler.from_config(ddpm_scheduler.config, use_karras_sigmas=True)
-    sampler.set_timesteps(num_inference_steps)
-    return sampler
+def karras_sigma_schedule(num_steps, sigma_min, sigma_max, rho=7):
+    """The Karras et al. noise schedule (their Eq. 5): num_steps+1 sigmas,
+    descending from sigma_max to 0."""
+    i = torch.arange(num_steps, dtype=torch.float64)
+    sigmas = (
+        sigma_max ** (1 / rho) + i / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))
+    ) ** rho
+    return torch.cat([sigmas, torch.zeros(1, dtype=torch.float64)])
 
 
 @torch.no_grad()
-def karras_sample(model, sampler, expr_z, image_size, device):
-    """Run the Karras/Heun sampling loop for an RnaConditionedUnetMC-style
-    model (forward(x, t, expr_z) -> predicted noise). HeunDiscreteScheduler
-    sometimes evaluates the model twice per step (2nd-order correction), so
-    unlike plain DDPMScheduler sampling this does NOT always call the model
-    exactly len(sampler.timesteps) times -- scheduler.step() reports which
-    step it's in internally."""
+def karras_sample(
+    model, ddpm_scheduler, expr_z, image_size, device,
+    num_steps=32, rho=7, s_churn=80, s_tmin=0.05, s_tmax=50, s_noise=1.003,
+):
+    """Karras et al. (2022) Algorithm 2 (stochastic sampler), with the
+    exact hyperparameters the RNA-CDM paper reports ("we used the extension
+    presented by Karras et al. [51]... ρ=7, S_churn=80, S_tmin=0.05,
+    S_tmax=50, S_noise=1.003 and 32 steps"), run against our standard
+    DDPM-trained epsilon-prediction UNet (the paper's own training stays
+    plain DDPM: linear Gaussian, 1000 timesteps, L2/epsilon-prediction --
+    only the sampler is Karras et al.'s, applied after the fact).
+
+    Conversion used: the standard VP (DDPM) <-> VE (EDM) correspondence --
+    for the variance-preserving forward process x_t = sqrt(ab_t) x_0 +
+    sqrt(1-ab_t) eps, dividing through by sqrt(ab_t) gives the equivalent
+    variance-exploding sample x_sigma = x_0 + sigma * eps with
+    sigma(t) = sqrt((1-ab_t)/ab_t). sigma_min/sigma_max for the Karras
+    schedule are taken from the DDPMScheduler's own alphas_cumprod (the
+    model's actual trained noise range), since the paper doesn't state
+    these two values explicitly. No retraining needed -- inference only,
+    same checkpoint as plain DDPM ancestral sampling would use."""
+    ab = ddpm_scheduler.alphas_cumprod.to(device)
+    sigmas_by_t = torch.sqrt((1 - ab) / ab)
+    sigma_min, sigma_max = sigmas_by_t[0].item(), sigmas_by_t[-1].item()
+
+    def nearest_t(sigma):
+        return torch.argmin(torch.abs(sigmas_by_t - sigma)).item()
+
+    def denoise(x_sigma, sigma, expr_z):
+        t = nearest_t(sigma)
+        ab_t = ab[t]
+        x_t_scaled = x_sigma * torch.sqrt(ab_t)
+        t_batch = torch.full((x_sigma.shape[0],), t, device=device, dtype=torch.long)
+        eps_pred = model(x_t_scaled, t_batch, expr_z)
+        return x_sigma - sigma * eps_pred
+
+    sigmas = karras_sigma_schedule(num_steps, sigma_min, sigma_max, rho=rho).to(device)
     bs = expr_z.shape[0]
-    x = torch.randn(bs, 3, image_size, image_size, device=device) * sampler.init_noise_sigma
-    for t in sampler.timesteps:
-        model_input = sampler.scale_model_input(x, t)
-        noise_pred = model(model_input, t, expr_z)
-        x = sampler.step(noise_pred, t, x).prev_sample
+    x = torch.randn(bs, 3, image_size, image_size, device=device) * sigmas[0]
+
+    for i in range(num_steps):
+        sigma_i, sigma_next = sigmas[i], sigmas[i + 1]
+        gamma = min(s_churn / num_steps, 2 ** 0.5 - 1) if s_tmin <= sigma_i <= s_tmax else 0.0
+        sigma_hat = sigma_i * (1 + gamma)
+        if gamma > 0:
+            eps = torch.randn_like(x) * s_noise
+            x_hat = x + (sigma_hat ** 2 - sigma_i ** 2).clamp(min=0).sqrt() * eps
+        else:
+            x_hat = x
+
+        d_i = (x_hat - denoise(x_hat, sigma_hat, expr_z)) / sigma_hat
+        x_next = x_hat + (sigma_next - sigma_hat) * d_i
+
+        if sigma_next > 0:
+            d_next = (x_next - denoise(x_next, sigma_next, expr_z)) / sigma_next
+            x_next = x_hat + (sigma_next - sigma_hat) * 0.5 * (d_i + d_next)
+
+        x = x_next
+
     return x

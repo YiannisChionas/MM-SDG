@@ -28,5 +28,4 @@ python3 ~/git/MM-SDG/hpc_experiment_multicancer/sample_rna_mc.py \
     --output-dir ${OUT} \
     --max-samples 2000 \
     --batch-size 64 \
-    --num-inference-steps 40 \
     "$@"

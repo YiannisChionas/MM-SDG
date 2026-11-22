@@ -4,9 +4,10 @@ layout as hpc_experiment_rna/sample_rna.py, but:
   - pooled across the 5 multi-cancer types, pointed at the multi-cancer VAE
   - samples with the EMA weights (matches the paper's Methods), not the raw
     training network
-  - samples with a Karras et al. (2022) sampler (HeunDiscreteScheduler,
-    use_karras_sigmas=True) instead of the full 1000-step DDPM ancestral
-    chain -- same already-trained checkpoint, ~40 steps instead of 1000.
+  - samples with the actual Karras et al. (2022) stochastic sampler
+    (Algorithm 2), using the exact hyperparameters the RNA-CDM paper
+    reports (rho=7, S_churn=80, S_tmin=0.05, S_tmax=50, S_noise=1.003,
+    32 steps) -- same already-trained DDPM checkpoint, no retraining.
 
 Resumable: counts existing .png files and only generates the remainder.
 """
@@ -21,8 +22,7 @@ from diffusers import DDPMScheduler
 from PIL import Image
 
 from data_utils_multicancer import (
-    GeneExpressionNormalizer, BetaVAEPaper, RnaConditionedUnetMC,
-    make_karras_sampler, karras_sample,
+    GeneExpressionNormalizer, BetaVAEPaper, RnaConditionedUnetMC, karras_sample,
 )
 
 
@@ -38,9 +38,12 @@ def main():
                          help="Cap on held-out spots to use (test folds can have thousands)")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--image-size", type=int, default=64)
-    parser.add_argument("--num-inference-steps", type=int, default=40,
-                         help="Karras/Heun sampling steps -- the whole point of this sampler "
-                              "is needing far fewer than the 1000-step DDPM chain")
+    parser.add_argument("--num-steps", type=int, default=32, help="Paper's reported step count")
+    parser.add_argument("--rho", type=float, default=7)
+    parser.add_argument("--s-churn", type=float, default=80)
+    parser.add_argument("--s-tmin", type=float, default=0.05)
+    parser.add_argument("--s-tmax", type=float, default=50)
+    parser.add_argument("--s-noise", type=float, default=1.003)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -86,9 +89,9 @@ def main():
     synth_dir.mkdir(parents=True, exist_ok=True)
 
     ddpm_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule="squaredcos_cap_v2")
-    sampler = make_karras_sampler(ddpm_scheduler, num_inference_steps=args.num_inference_steps)
-    print(f"Karras/Heun sampler: {args.num_inference_steps} inference steps "
-          f"(vs. 1000 for plain DDPM ancestral sampling)", flush=True)
+    print(f"Karras et al. stochastic sampler: {args.num_steps} steps, rho={args.rho}, "
+          f"S_churn={args.s_churn}, S_tmin={args.s_tmin}, S_tmax={args.s_tmax}, "
+          f"S_noise={args.s_noise} (paper's reported settings)", flush=True)
 
     n_done = len(list(synth_dir.glob("*.png")))
     if n_done >= len(index):
@@ -115,7 +118,11 @@ def main():
             torch.from_numpy(normalizer.transform(e).astype("float32")) for _, _, e, _code in batch
         ]).to(device)
 
-        x = karras_sample(model, sampler, exprs, args.image_size, device)
+        x = karras_sample(
+            model, ddpm_scheduler, exprs, args.image_size, device,
+            num_steps=args.num_steps, rho=args.rho, s_churn=args.s_churn,
+            s_tmin=args.s_tmin, s_tmax=args.s_tmax, s_noise=args.s_noise,
+        )
         synth_imgs = ((x.clamp(-1, 1) + 1) / 2 * 255).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
 
         for i, (fp, local_idx, _expr, _code) in enumerate(batch):
