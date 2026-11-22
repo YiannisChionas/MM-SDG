@@ -64,9 +64,9 @@ def main():
     diff_ckpt = torch.load(args.diffusion_checkpoint, map_location=device)
     # Sample with the EMA weights, not the raw training network -- matches
     # the paper's Methods (EMA network used for sampling).
-    model.model.load_state_dict(diff_ckpt["ema_state_dict"])
+    model.net.load_state_dict(diff_ckpt["ema_state_dict"])
     model.eval()
-    print(f"Loaded diffusion checkpoint from epoch {diff_ckpt['epoch']} (EMA weights)", flush=True)
+    print(f"Loaded diffusion checkpoint from step {diff_ckpt['step']} (EMA weights)", flush=True)
 
     wsis_df = pd.read_csv(args.selected_wsis_csv)
     wsi_to_code = dict(zip(wsis_df["id"], wsis_df["oncotree_code"]))
@@ -88,7 +88,7 @@ def main():
     real_dir.mkdir(parents=True, exist_ok=True)
     synth_dir.mkdir(parents=True, exist_ok=True)
 
-    ddpm_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule="squaredcos_cap_v2")
+    ddpm_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule="linear")
     print(f"Karras et al. stochastic sampler: {args.num_steps} steps, rho={args.rho}, "
           f"S_churn={args.s_churn}, S_tmin={args.s_tmin}, S_tmax={args.s_tmax}, "
           f"S_noise={args.s_noise} (paper's reported settings)", flush=True)

@@ -300,15 +300,28 @@ class HestMultiCancerPatchExpressionDataset(Dataset):
 
 
 class RnaConditionedUnetMC(nn.Module):
-    """UNet2DModel conditioned on the frozen multi-cancer beta-VAE's latent
-    embedding of the patch's real gene expression, broadcast as extra input
-    channels -- same pattern as hpc_experiment_rna's RnaConditionedUnet,
-    pointed at BetaVAEPaper (latent_dim=200) instead of the CCRCC-only
-    50-gene BetaVAE."""
+    """UNet2DConditionModel conditioned on the frozen multi-cancer beta-VAE's
+    latent embedding of the patch's real gene expression -- Imagen-style
+    conditioning (paper's Methods: "we followed [the architecture] presented
+    in the Imagen paper", "attention and skip connections are used across
+    the Unet layers", "a dimension of 256 for the low-resolution... diffusion
+    model[s]"), via TWO standard Imagen conditioning paths fed from the same
+    latent vector:
+      1. cross-attention over the latent as a single-token sequence
+         (encoder_hidden_states, dim=cross_attention_dim=256 for stage 1),
+      2. the pooled latent additionally projected into the timestep
+         embedding (class_embed_type="projection" -- diffusers' mechanism
+         for exactly this, used e.g. for SDXL's size/crop conditioning).
 
-    def __init__(self, vae: BetaVAEPaper, image_size=64):
+    Replaces an earlier, much simpler version of this class that broadcast
+    the latent as extra spatial input channels (no attention at all on the
+    conditioning signal) -- that was carried over unchecked from
+    hpc_experiment_rna's CCRCC-only RnaConditionedUnet and never actually
+    matched the paper's stated Imagen-based architecture."""
+
+    def __init__(self, vae: BetaVAEPaper, image_size=64, cross_attention_dim=256):
         super().__init__()
-        from diffusers import UNet2DModel
+        from diffusers import UNet2DConditionModel
 
         self.vae = vae
         for p in self.vae.parameters():
@@ -316,21 +329,30 @@ class RnaConditionedUnetMC(nn.Module):
         self.vae.eval()
 
         latent_dim = vae.latent_dim
-        self.model = UNet2DModel(
+        unet = UNet2DConditionModel(
             sample_size=image_size,
-            in_channels=3 + latent_dim,
+            in_channels=3,
             out_channels=3,
             layers_per_block=2,
             block_out_channels=(128, 128, 256, 256, 512, 512),
             down_block_types=(
-                "DownBlock2D", "DownBlock2D", "DownBlock2D",
-                "DownBlock2D", "AttnDownBlock2D", "DownBlock2D",
+                "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D",
             ),
             up_block_types=(
-                "UpBlock2D", "AttnUpBlock2D", "UpBlock2D",
-                "UpBlock2D", "UpBlock2D", "UpBlock2D",
+                "UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D", "UpBlock2D", "UpBlock2D",
             ),
+            cross_attention_dim=cross_attention_dim,
+            class_embed_type="projection",
+            projection_class_embeddings_input_dim=latent_dim,
         )
+        # Bundled under one submodule (trainable parameters only, VAE
+        # excluded) so the optimizer/EMA/checkpoint code -- which all refer
+        # to `model.net` -- picks up BOTH the UNet and the cross-attention
+        # projection together. cond_proj is trainable; forgetting it here
+        # would silently leave it frozen at its random init.
+        self.net = nn.ModuleDict({"unet": unet, "cond_proj": nn.Linear(latent_dim, cross_attention_dim)})
 
     def encode_condition(self, expr_z):
         with torch.no_grad():
@@ -338,9 +360,11 @@ class RnaConditionedUnetMC(nn.Module):
         return mu
 
     def forward(self, x, t, expr_z):
-        bs, ch, w, h = x.shape
-        cond = self.encode_condition(expr_z).view(bs, -1, 1, 1).expand(bs, -1, w, h)
-        return self.model(torch.cat((x, cond), dim=1), t).sample
+        cond = self.encode_condition(expr_z)  # (B, latent_dim)
+        encoder_hidden_states = self.net["cond_proj"](cond).unsqueeze(1)  # (B, 1, cross_attention_dim)
+        return self.net["unet"](
+            x, t, encoder_hidden_states=encoder_hidden_states, class_labels=cond,
+        ).sample
 
 
 class EMA:
@@ -349,21 +373,21 @@ class EMA:
     the model were maintained during training: i) the training network...
     ii) the EMA network", with the EMA network used for sampling).
 
-    Only wraps model.model (the UNet2DModel's own parameters) since that's
-    the only trainable submodule of RnaConditionedUnetMC -- the VAE inside
-    it is frozen and never updated."""
+    Only wraps model.net (the UNet + cond_proj, i.e. all trainable
+    submodules of RnaConditionedUnetMC) -- the VAE inside it is frozen and
+    never updated."""
 
     def __init__(self, model, decay=0.9995):
         self.decay = decay
-        self.shadow = copy.deepcopy(model.model).eval()
+        self.shadow = copy.deepcopy(model.net).eval()
         for p in self.shadow.parameters():
             p.requires_grad_(False)
 
     @torch.no_grad()
     def update(self, model):
-        for shadow_p, p in zip(self.shadow.parameters(), model.model.parameters()):
+        for shadow_p, p in zip(self.shadow.parameters(), model.net.parameters()):
             shadow_p.mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
-        for shadow_b, b in zip(self.shadow.buffers(), model.model.buffers()):
+        for shadow_b, b in zip(self.shadow.buffers(), model.net.buffers()):
             shadow_b.copy_(b)
 
     def state_dict(self):
