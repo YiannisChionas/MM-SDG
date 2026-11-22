@@ -21,7 +21,11 @@ HEST_DIR=/opt/storage/datasets/HEST
 EXP_DIR=/opt/storage/users/${USER}/experiments/hest-vae-multicancer
 mkdir -p ${EXP_DIR}
 
-GENE_PANEL=$(ls ${HEST_DIR}/gene_panel_multicancer_*.json | head -1)
+# Sort numerically by the gene-count suffix and take the LARGEST --
+# plain `ls | head -1` is alphabetical, so a stale gene_panel_multicancer_0.json
+# (or any small number) from an earlier broken run would always win over the
+# real, larger panel. Bit us once already.
+GENE_PANEL=$(ls ${HEST_DIR}/gene_panel_multicancer_*.json | sort -t_ -k4 -n -r | head -1)
 if [ -z "${GENE_PANEL}" ]; then
     echo "No gene_panel_multicancer_*.json found in ${HEST_DIR} -- run job_select_genes.sh first." >&2
     exit 1

@@ -31,7 +31,10 @@ mkdir -p ${EXP_DIR} ${PERSIST_DIR}
 
 cp -a ${PERSIST_DIR}/. ${EXP_DIR}/ 2>/dev/null || true
 
-GENE_PANEL=$(ls ${EXP_DIR}/gene_panel_*.json | head -1)
+# Sort numerically by the gene-count suffix and take the LARGEST --
+# plain `ls | head -1` is alphabetical, so a stale small-count panel from
+# an earlier broken run would always win over the real, larger one.
+GENE_PANEL=$(ls ${EXP_DIR}/gene_panel_*.json | sort -t_ -k3 -n -r | head -1)
 if [ -z "${GENE_PANEL}" ]; then
     echo "No gene_panel_*.json found in ${EXP_DIR} -- run job_select_genes.sh first." >&2
     exit 1
