@@ -31,6 +31,17 @@ set -e  # propagate python/sbatch-step failures -- without this, a crashed
 # gives much more headroom for the in-flight training step (~10 sec/step)
 # to finish and the ~2.4GB torch.save() over NFS to complete before the
 # real time-limit kill arrives.
+#
+# Two manual `scancel --signal=USR1 --batch` tests still failed the same
+# way within seconds (ruled out a DataLoader-worker-death theory first --
+# a worker_init_fn fix for that didn't help either). Root cause: `wait
+# $PID` below gets INTERRUPTED by the trapped signal and returns before
+# python actually exits, with set -e then killing this whole script
+# immediately on that non-zero return -- which makes SLURM tear down the
+# job's whole cgroup (SIGKILL included) right as python was starting its
+# graceful checkpoint save. The loop below keeps re-issuing `wait` (and
+# the `&&`/`||` keeps set -e from firing on an interrupted wait) until
+# the process has actually exited.
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
@@ -53,4 +64,9 @@ python3 ~/git/MM-SDG/hpc_experiment_multicancer/train_rna_mc.py \
     "$@" &
 PID=$!
 trap 'echo "forwarding SIGUSR1 to python (pid $PID)"; kill -USR1 $PID' USR1
-wait $PID
+
+RC=0
+while kill -0 "$PID" 2>/dev/null; do
+    wait "$PID" && RC=0 || RC=$?
+done
+exit $RC
