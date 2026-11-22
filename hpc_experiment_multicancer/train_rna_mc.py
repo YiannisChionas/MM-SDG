@@ -108,11 +108,26 @@ def main():
     index = build_patch_expr_index(args.hest_dir, fit_ids, wsi_to_code, vae_ckpt["genes"])
     print(f"Total matched (image, expression) pairs: {len(index)}", flush=True)
 
+    def _worker_ignore_shutdown_signals(_worker_id):
+        # SLURM's graceful-shutdown signal (and our manual test signal via
+        # `scancel --signal=USR1`) goes to the whole job process group --
+        # that includes these DataLoader worker subprocesses, not just the
+        # main process. Without a handler, a worker's default action for
+        # SIGUSR1 is to die, which breaks the next next(data_iter) call in
+        # the main training loop before it ever reaches the checkpoint-save
+        # code (observed: job failed within seconds of the signal, no
+        # checkpoint written, no traceback -- consistent with a worker
+        # dying mid-fetch). Workers ignore both signals; only the main
+        # process (which has its own handler) should act on them.
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
     dataset = HestMultiCancerPatchExpressionDataset(index, normalizer, image_size=args.image_size)
     loader = DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True, drop_last=True,
         persistent_workers=args.num_workers > 0,
+        worker_init_fn=_worker_ignore_shutdown_signals if args.num_workers > 0 else None,
     )
     steps_per_epoch = len(loader)
     print(f"{steps_per_epoch} steps/epoch at batch size {args.batch_size} "
