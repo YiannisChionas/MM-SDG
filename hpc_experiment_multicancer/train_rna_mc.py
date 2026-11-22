@@ -26,6 +26,7 @@ Auto-resumes from checkpoint.pt to fit the cluster's job time limit.
 
 import argparse
 import json
+import signal
 import time
 from pathlib import Path
 
@@ -152,6 +153,21 @@ def main():
             for batch in loader:
                 yield batch
 
+    # SLURM's --signal=B:USR1@<seconds> (see job_train_rna_mc.sh) sends
+    # SIGUSR1 some time before the hard time-limit kill -- catching it here
+    # lets us save a final checkpoint at whatever step we're on, instead of
+    # losing everything back to the last periodic --checkpoint-every save
+    # (which, at ~10 sec/step, can be most of an hour of work).
+    stop_requested = {"flag": False}
+
+    def handle_stop_signal(signum, frame):
+        print(f"  received signal {signum} -- will checkpoint and exit "
+              f"after the current step", flush=True)
+        stop_requested["flag"] = True
+
+    signal.signal(signal.SIGUSR1, handle_stop_signal)
+    signal.signal(signal.SIGTERM, handle_stop_signal)
+
     data_iter = infinite_batches()
     model.net.train()
     t0 = time.time()
@@ -177,11 +193,15 @@ def main():
             print(f"  step {step}/{args.total_steps} loss {loss.item():.5f} "
                   f"({dt/60:.1f} min elapsed this run)", flush=True)
 
-        if (step + 1) % args.checkpoint_every == 0 or step + 1 == args.total_steps:
+        if (step + 1) % args.checkpoint_every == 0 or step + 1 == args.total_steps or stop_requested["flag"]:
             save_checkpoint(ckpt_path, model, ema, optimizer, step, losses)
             with open(out_dir / "losses.json", "w") as f:
                 json.dump(losses, f)
             print(f"  checkpointed at step {step}", flush=True)
+
+        if stop_requested["flag"]:
+            print(f"Stopping early at step {step} due to signal -- resubmit to resume.", flush=True)
+            return
 
     print("Training complete.", flush=True)
 
