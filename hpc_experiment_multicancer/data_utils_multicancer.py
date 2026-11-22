@@ -375,7 +375,18 @@ class EMA:
 
     Only wraps model.net (the UNet + cond_proj, i.e. all trainable
     submodules of RnaConditionedUnetMC) -- the VAE inside it is frozen and
-    never updated."""
+    never updated.
+
+    Uses an EMA warmup schedule (common practice, e.g. OpenAI's
+    guided-diffusion): effective_decay = min(decay, (step+1)/(step+10)).
+    Confirmed empirically necessary here -- at decay=0.9995 (time constant
+    ~1/(1-decay)=2000 steps), sampling with the EMA network at step 999
+    (<1 time constant) produced pure noise, because the average was still
+    ~60% weighted toward the random initialization. Raw (non-EMA) weights
+    at the same step produced plausible H&E-like output, confirming the
+    model itself was learning fine and this was purely an EMA lag issue.
+    The warmup makes the EMA track the raw network closely for the first
+    few hundred steps, then ramp up to the target decay."""
 
     def __init__(self, model, decay=0.9995):
         self.decay = decay
@@ -384,9 +395,10 @@ class EMA:
             p.requires_grad_(False)
 
     @torch.no_grad()
-    def update(self, model):
+    def update(self, model, step=None):
+        decay = self.decay if step is None else min(self.decay, (step + 1) / (step + 10))
         for shadow_p, p in zip(self.shadow.parameters(), model.net.parameters()):
-            shadow_p.mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
+            shadow_p.mul_(decay).add_(p.detach(), alpha=1 - decay)
         for shadow_b, b in zip(self.shadow.buffers(), model.net.buffers()):
             shadow_b.copy_(b)
 

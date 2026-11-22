@@ -185,7 +185,7 @@ def main():
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        ema.update(model)
+        ema.update(model, step=step)
 
         losses.append(loss.item())
         if step % 50 == 0:
