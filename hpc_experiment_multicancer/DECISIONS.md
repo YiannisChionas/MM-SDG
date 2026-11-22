@@ -203,6 +203,15 @@ intersections, not some fundamental incompatibility between platforms.
 
 ## 9. Train/val/test split -- RESOLVED (patient-level where possible, WSI-level fallback)
 
+**Ratio: exactly 60/20/20, matching the paper.** `train_vae_multicancer.py`
+does two nested splits: `--test-frac 0.2` removes 20% up front as the
+held-out test set, then `--val-frac` of the *remaining* 80% becomes the
+early-stopping validation set. Naively using `--val-frac 0.2` would give
+val = 0.2×0.8 = 16% overall (64/16/20 train/val/test, not 60/20/20) --
+`--val-frac` therefore defaults to **0.25**, so val = 0.25×0.8 = 20% and
+fit = 0.75×0.8 = 60%, matching the paper's ratio exactly. No reason to
+deviate here since matching costs nothing.
+
 `data_utils_multicancer.split_train_test_wsis` checks, per cancer type,
 whether the `patient` field is populated for every one of its **selected**
 WSIs; if so it splits by unique patient (keeping all of a patient's WSIs

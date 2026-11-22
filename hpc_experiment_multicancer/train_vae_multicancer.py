@@ -58,8 +58,11 @@ def main():
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--test-frac", type=float, default=0.2,
                          help="Fraction held out as the final test split (never touched here)")
-    parser.add_argument("--val-frac", type=float, default=0.2,
-                         help="Fraction of the TRAIN split further held out for early-stopping validation")
+    parser.add_argument("--val-frac", type=float, default=0.25,
+                         help="Fraction of the TRAIN split further held out for early-stopping "
+                              "validation. 0.25 (not 0.2) is deliberate: test_frac=0.2 removes 20%% "
+                              "up front, so val_frac=0.25 of the remaining 80%% works out to exactly "
+                              "60/20/20 train/val/test overall, matching the paper's split ratio.")
     parser.add_argument("--epochs", type=int, default=250)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
