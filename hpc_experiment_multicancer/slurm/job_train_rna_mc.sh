@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --time=05:00:00
-#SBATCH --signal=B:USR1@300
+#SBATCH --signal=B:USR1@900
 
 set -e  # propagate python/sbatch-step failures -- without this, a crashed
         # job falls through to cp -a below and SLURM reports false success
@@ -18,13 +18,19 @@ set -e  # propagate python/sbatch-step failures -- without this, a crashed
 # job_train_vae_multicancer.sh -- /var/local/storage isn't writable for
 # this account on anakin's node (hpc06), unlike obiwan's hpc01.
 #
-# --signal=B:USR1@300 makes SLURM send SIGUSR1 to this script 300s before
-# the hard time-limit kill. train_rna_mc.py catches it and saves a final
-# checkpoint at whatever step it's on, instead of losing everything back
-# to the last periodic --checkpoint-every save (at ~10 sec/step, that can
-# be most of an hour of work). The trap below forwards the signal from
-# this shell to the python child, since bash doesn't do that automatically
-# for a foregrounded command.
+# --signal=B:USR1@900 makes SLURM send SIGUSR1 to this script 900s (15min)
+# before the hard time-limit kill. train_rna_mc.py catches it and saves a
+# final checkpoint at whatever step it's on, instead of losing everything
+# back to the last periodic --checkpoint-every save. The trap below
+# forwards the signal from this shell to the python child, since bash
+# doesn't do that automatically for a foregrounded command.
+#
+# First attempt used @300 (5min) and still lost progress -- the job ended
+# FAILED with no "checkpointed at step" line ever printed after the signal
+# was received, and checkpoint.pt was untouched. Widening to 15 minutes
+# gives much more headroom for the in-flight training step (~10 sec/step)
+# to finish and the ~2.4GB torch.save() over NFS to complete before the
+# real time-limit kill arrives.
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
