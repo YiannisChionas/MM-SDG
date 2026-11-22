@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=anakin
+#SBATCH --partition=obiwan
 #SBATCH --ntasks 1
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
@@ -8,9 +8,11 @@ set -e  # propagate python/sbatch-step failures -- without this, a crashed
         # job falls through to cp -a below and SLURM reports false success
 
 # Paired generation on held-out (test-split) WSIs, using the EMA weights
-# and the Karras/Heun sampler (~40 steps instead of 1000) -- see
-# sample_rna_mc.py docstring. anakin access is temporary, requires explicit
-# go-ahead each time, per CLAUDE.md Rule #1.
+# and the Karras/Heun sampler (32 steps instead of 1000) -- see
+# sample_rna_mc.py docstring. Lightweight relative to training (32-step
+# sampler, small batches), so this runs on obiwan rather than anakin --
+# keeps it off the anakin training chain and matches the cluster's
+# resource etiquette (obiwan for lightweight jobs).
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate sdg
