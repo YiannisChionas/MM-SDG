@@ -5,3 +5,7 @@ __pycache__/
 # Local-only, not for the public repo (cluster/account operational details)
 CLAUDE.md
 .claude/
+checkpoints/
+
+# Large local-only scratch/dataset copies, not for the public repo
+hest-bench/

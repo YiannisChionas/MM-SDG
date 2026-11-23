@@ -246,19 +246,165 @@ applies; valid splits from the WSI-level fallback). Re-verified against
 the final PRAD-based selection (same pattern as the LIHB-based one:
 2 of 5 types have usable patient info, 3 don't).
 
+## 10. VAE training results (RESOLVED -- trained, evaluated)
+
+Two real runs on anakin:
+- Run 1: batch_size=256, cosine LR schedule computed against
+  `total_epochs=250` (the hard epoch cap), patience=20. Early-stopped at
+  epoch 27, best val loss **0.8576** at epoch 7. Flagged as suspicious --
+  only 8 "productive" epochs before overfitting, and the LR schedule
+  hadn't meaningfully decayed by epoch 27 (still near its peak).
+- Run 2 (current, matches paper's batch_size=128): batch_size=128,
+  `--lr-schedule-epochs=50` (decoupled from the epoch cap, which stayed
+  250), patience=40. Early-stopped at epoch 44, best val loss **0.8482**
+  at epoch 4 -- essentially the same early-optimum pattern as run 1, just
+  slightly better. Confirms the batch-size/LR-schedule change wasn't the
+  real lever; see the RMSE/FID findings below for what actually explains
+  this plateau.
+- Checkpoint used downstream: `vae_multicancer_best.pt` (run 2, epoch 4).
+  Run 1's checkpoints archived at `run1_bs256_archive/` on the cluster,
+  not used further.
+
+**Test-set RMSE/MAE** (`_eval_test_rmse.py`, one-off diagnostic, not kept
+in the repo): RMSE=0.9355, MAE=0.5136 vs. the paper's reported
+RMSE=0.2475, MAE=0.1471 -- roughly 3.7x worse. Diagnosed via a z-scored
+sparsity check: 0.45% of z-scored test values exceed |z|=5, with a max
+|z|=106.94 -- because MSE is quadratic, this small tail of extreme
+outliers (characteristic of sparse, zero-inflated spot-level Visium
+expression vs. the paper's smoother bulk-like profiles) plausibly
+explains a large share of the gap. Not attributed to a pipeline bug --
+the normalizer doesn't drift fit->test, the split is leak-free, and the
+gene panel is the correct 14,368-gene one.
+
+## 11. Stage-1 diffusion (RNA -> 64x64 image): architecture + training (RESOLVED, training ongoing)
+
+Built in `train_rna_mc.py` / `data_utils_multicancer.py`
+(`RnaConditionedUnetMC`, `EMA`, `karras_sample`), matched to the paper's
+confirmed Methods for this stage after a first pass that unintentionally
+inherited the CCRCC-only script's (`hpc_experiment_rna`) choices
+unchecked:
+
+- **Conditioning**: Imagen-style -- cross-attention over the VAE latent as
+  a single-token sequence (`cross_attention_dim=256`, matching "a
+  dimension of 256 for the low-resolution... diffusion model[s]") PLUS
+  the pooled latent projected into the timestep embedding
+  (`class_embed_type="projection"`, diffusers' FiLM-into-time mechanism).
+  Replaces an earlier spatial-broadcast-concat version that had no
+  attention on the conditioning signal at all.
+- **Noise schedule**: `beta_schedule="linear"`, 1000 timesteps (paper:
+  "linear gaussian diffusion process... timesteps = 1000"). Was
+  `squaredcos_cap_v2` in the first pass -- wrong, fixed.
+- **Batch size**: 256 (paper: 64/GPU x 4 GPUs = effective 256; we have 1
+  GPU, so 256 directly rather than per-GPU 64).
+- **Training budget**: step-based, `--total-steps` default **79,000**
+  (paper: "the training process required 79k steps"). Ambiguous in the
+  paper whether this is per-stage or a combined total across both DDPMs
+  -- our reading (favored after re-checking the paper's own "~8 days
+  training" framing, which fits a per-stage budget better than a split
+  one) is that it applies PER STAGE, so stage 2 also targets 79,000 steps
+  independently, not a shared/split budget.
+- **EMA**: tracked per the paper's Methods ("two versions of the model...
+  the EMA network" used for sampling), decay=0.9995 (paper doesn't state
+  the decay rate). **Needed a warmup schedule**
+  (`effective_decay = min(decay, (step+1)/(step+10))`) after an early
+  sampling test at step 999 produced pure RGB noise with EMA weights
+  while the SAME checkpoint's raw (non-EMA) weights produced plausible
+  H&E-like output -- confirmed the model was learning fine and the EMA
+  average (time constant ~1/(1-decay)=2000 steps) just hadn't caught up
+  yet, not a sampler/conditioning bug.
+- **Sampler**: the actual Karras et al. (2022) stochastic sampler
+  (Algorithm 2 in "Elucidating the Design Space of Diffusion-Based
+  Generative Models"), not a generic "karras sigmas" scheduler flag --
+  exact hyperparameters from the paper: rho=7, S_churn=80, S_tmin=0.05,
+  S_tmax=50, S_noise=1.003, 32 steps. Implemented via the standard VP
+  (DDPM) <-> VE (EDM) sigma conversion
+  (`sigma(t) = sqrt((1-alpha_bar_t)/alpha_bar_t)`) wrapping our
+  standard-DDPM-trained epsilon-prediction UNet -- no retraining needed,
+  inference only.
+
+**Infrastructure hardening** (SLURM 5h job time limit): training
+auto-resumes from `checkpoint.pt`. Graceful shutdown on the time-limit
+warning signal took three iterations to get right (see
+`slurm/job_train_rna_mc.sh` comments for the full history):
+1. `--signal=B:USR1@300` (5min warning) -- still lost progress, no
+   checkpoint saved, job FAILED with no traceback.
+2. Widened to `@900` (15min) -- same failure. Diagnosed (wrongly, at
+   first) as DataLoader workers dying from the broadcast signal; a
+   `worker_init_fn` making workers ignore SIGUSR1/SIGTERM didn't fix it.
+3. Real root cause: `wait $PID` in the job script was getting
+   INTERRUPTED by the trapped signal and returning before python
+   actually exited, and `set -e` then killed the whole script
+   immediately -- causing SLURM to tear down the job's cgroup (SIGKILL
+   included) right as python was starting its checkpoint save. Fixed
+   with a `while kill -0 "$PID"; do wait "$PID" ...; done` loop that
+   keeps re-waiting until the process has actually exited. Verified
+   working via `scancel --signal=USR1 --batch <jobid>` manual tests
+   before trusting it for real 5h cutoffs, then confirmed again on two
+   real time-limit cutoffs overnight with zero failures.
+
+**FID progress** (`compute_fid_mc.py`, NOT the paper's FID50k protocol --
+10k tiles/cancer type, 50k total, too expensive at this stage; ours is a
+smaller, consistent 5000-sample/raw-weights/same-sampler-settings
+protocol meant for tracking checkpoint-over-checkpoint progress, stored
+per-label in `fid_mc_results.json`):
+
+| step | FID (raw weights, 5000 paired samples) |
+|---|---|
+| 999 | 201.41 |
+| 1999 | 164.66 |
+| 5999 | 88.40 |
+| 8999 | 98.44 |
+
+Clear downward trend through step 5999, then a small uptick at 8999 --
+plausibly FID variance at this sample count rather than a real
+regression (paper's own FID is computed on 10x more samples per type);
+worth re-checking at the next few checkpoints before drawing a
+conclusion either way. Raw (non-EMA) weights used throughout these
+evaluations since EMA hasn't reached its warmup-adjusted steady state
+yet at these step counts (see EMA warmup note above) -- switch to EMA for
+the final reported numbers once training is far enough along.
+
+## 12. Stage-2 diffusion (64x64 + RNA -> 256x256 super-resolution): scaffolded, not yet run
+
+Built in `train_rna_sr_mc.py` / `sample_rna_sr_mc.py` /
+`data_utils_multicancer.py` (`HestMultiCancerPatchPairDataset`,
+`RnaSRConditionedUnetMC`, `karras_sample_sr`), same paper-matched recipe
+as stage 1 with the stage-2-specific differences:
+
+- **Resolution**: 256x256 output (matches our patch extraction's native
+  256px, no resize needed -- see section 3/5). Conditioned on a 64x64
+  low-res image (stage 1's output).
+- **Low-res conditioning prep**: Gaussian blur (paper: "a gaussian blur
+  is applied to that image and it serves as input to the super-resolution
+  diffusion model"). Kernel size (9) and sigma (3.0) aren't given by the
+  paper -- our own choice, not yet validated.
+- **Conditioning dimension**: `cross_attention_dim=128` (paper: "...128
+  for the super-resolution diffusion models"), vs. 256 for stage 1.
+- **Training-time low-res**: ground-truth-downsampled-then-blurred from
+  the SAME real image (standard cascaded-diffusion practice -- the actual
+  stage-1 model's output is only used at SAMPLING time, via
+  `sample_rna_sr_mc.py`'s full cascade). No conditioning-augmentation
+  noise added (unlike `hpc_experiment_rna_sr`'s CCRCC precedent) -- we
+  deliberately dropped that to match the paper's description (blur only,
+  no mention of noise augmentation), accepting the known
+  train/sample-time distribution-gap risk this reintroduces.
+- **Batch size**: default 64, NOT the paper's effective 256 -- 256x256 is
+  far more memory-hungry per-sample than stage 1's 64x64 on our single
+  GPU. Unvalidated guess.
+- Same noise schedule (linear, 1000 timesteps), same EMA (with warmup),
+  same Karras sampler hyperparameters, same step-based 79,000-step
+  budget, same graceful-shutdown infrastructure as stage 1.
+
 ## Open / not yet decided
 
-- **VAE architecture settings for this 5-cancer-type pool**: the
-  architecture/hyperparameters themselves are already decided (same
-  paper-matched recipe as `hpc_experiment_vae_paper`: BatchNorm+LeakyReLU,
-  beta=0.005, 6000/4000/200, lr=3e-3+warmup/cosine, early stopping --
-  `BetaVAEPaper` in `data_utils_multicancer.py` is a direct copy). What's
-  NOT yet validated is whether these settings (tuned/reported for the
-  paper's own data, not ours) actually behave well at this scale/pool --
-  posterior collapse, convergence speed, overfitting -- which can only be
-  checked by actually running it.
-- **Batch size / partition feasibility on anakin/luke**: never actually
-  benchmarked. Needs a real run to confirm.
-- Diffusion model settings (architecture, conditioning mechanism, cascade
-  stages) for this multi-cancer setup -- not started at all yet (VAE
-  first).
+- **Stage-1 FID uptick at step 8999**: watch the next few checkpoints to
+  see if it's noise or a real regression.
+- **Stage-2 batch size / blur kernel+sigma / memory feasibility on
+  anakin**: none of these have been run yet, all unvalidated guesses.
+- **79k-steps-per-stage reading**: the paper's text doesn't unambiguously
+  say whether 79k is per-stage or a combined total -- see section 11.
+  If evidence later suggests otherwise, the total-steps target should be
+  revisited.
+- Full-cascade evaluation (stage 1 -> blur -> stage 2, via
+  `sample_rna_sr_mc.py`) hasn't been run even once yet -- stage 2 hasn't
+  started training.

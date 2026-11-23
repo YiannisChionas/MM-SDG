@@ -480,3 +480,198 @@ def karras_sample(
         x = x_next
 
     return x
+
+
+# ---------------------------------------------------------------------------
+# Stage-2 (super-resolution, 64x64 -> 256x256) diffusion: ground-truth-
+# downsampled + blurred low-res conditioning, the SR UNet, and its Karras
+# sampler. Paper's Methods: "The low-resolution diffusion models generate
+# an image of 64x64... Then, a gaussian blur is applied to that image and
+# it serves as input to the super-resolution diffusion model (along with
+# the RNA-Seq latent embedding and the timestep)... generates an image of
+# 256x256... using a dimension of 256 for the low-resolution and 128 for
+# the super-resolution diffusion models." Blur kernel/sigma and the SR
+# UNet's channel widths aren't specified by the paper -- our own choices,
+# flagged where set below.
+# ---------------------------------------------------------------------------
+
+def make_blurred_lowres_condition(high_res, low_res_size=64, blur_kernel_size=9, blur_sigma=3.0):
+    """Downsample to low_res_size (what stage 1 actually outputs), then
+    upsample back to high_res's resolution and apply a Gaussian blur --
+    the paper's described bridge between the two stages. At TRAINING time
+    this is applied to the real (ground-truth) image, standard cascaded-
+    diffusion practice (Ho et al., Imagen): the real stage-1 model is only
+    used for this input at SAMPLING time. Kernel size/sigma aren't stated
+    in the paper -- picked to be mild relative to the 64->256 (4x) upsample
+    blur that's already implicit in bilinear interpolation."""
+    import torchvision.transforms.functional as TF
+
+    size = high_res.shape[-1]
+    low = F.interpolate(high_res, size=(low_res_size, low_res_size), mode="bilinear", align_corners=False)
+    low_up = F.interpolate(low, size=(size, size), mode="bilinear", align_corners=False)
+    return TF.gaussian_blur(low_up, kernel_size=blur_kernel_size, sigma=blur_sigma)
+
+
+def build_patch_expr_index_sr(hest_dir, wsi_ids, wsi_to_code, gene_names):
+    """Alias of build_patch_expr_index -- same (h5_path, local_idx, expr,
+    code) index format works for both stages, since the only difference is
+    what HestMultiCancerPatchPairDataset does with the loaded image."""
+    return build_patch_expr_index(hest_dir, wsi_ids, wsi_to_code, gene_names)
+
+
+class HestMultiCancerPatchPairDataset(Dataset):
+    """For stage-2 training: returns (blurred_low_res_cond, high_res_target,
+    expr_z, cancer_type_code). high_res is the native 256x256 patch (our
+    extraction already matches the paper's tile size, no resize needed);
+    low_res_cond is built from the SAME real image via
+    make_blurred_lowres_condition (ground-truth-based training, the actual
+    stage-1 model's imperfect output is only used at sampling time)."""
+
+    def __init__(self, index, normalizer, image_size=256, low_res_size=64,
+                 blur_kernel_size=9, blur_sigma=3.0):
+        self.index = index
+        self.normalizer = normalizer
+        self.image_size = image_size
+        self.low_res_size = low_res_size
+        self.blur_kernel_size = blur_kernel_size
+        self.blur_sigma = blur_sigma
+        self._handles = {}
+
+    def __len__(self):
+        return len(self.index)
+
+    def _get_handle(self, path):
+        h = self._handles.get(path)
+        if h is None:
+            h = h5py.File(path, "r")
+            self._handles[path] = h
+        return h
+
+    def __getitem__(self, idx):
+        fp, local_idx, expr, code = self.index[idx]
+        f = self._get_handle(fp)
+        img = f["img"][local_idx]
+        high_res = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 127.5 - 1.0
+        if high_res.shape[-1] != self.image_size:
+            high_res = F.interpolate(
+                high_res.unsqueeze(0), size=(self.image_size, self.image_size),
+                mode="bilinear", align_corners=False,
+            ).squeeze(0)
+
+        low_res_cond = make_blurred_lowres_condition(
+            high_res.unsqueeze(0), self.low_res_size, self.blur_kernel_size, self.blur_sigma,
+        ).squeeze(0)
+
+        z = self.normalizer.transform(expr)
+        return low_res_cond, high_res, torch.from_numpy(z.astype(np.float32)), code
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_handles"] = {}
+        return state
+
+
+class RnaSRConditionedUnetMC(nn.Module):
+    """Stage-2 (super-resolution) UNet -- same Imagen-style cross-attention
+    + FiLM-projected pooled conditioning as RnaConditionedUnetMC (stage 1),
+    but with cross_attention_dim=128 (paper's stated SR dimension) and the
+    blurred low-res image concatenated as 3 extra input channels (paper:
+    the blurred image "serves as input to the super-resolution diffusion
+    model"). block_out_channels kept narrower than stage 1's (64 base vs
+    128) given the 16x larger spatial resolution (256x256 vs 64x64) --
+    the paper gives no per-stage channel-width breakdown, only a combined
+    1.8B-parameter total for the whole cascade; this is our own practical
+    choice, same spirit as hpc_experiment_rna_sr's CCRCC precedent."""
+
+    def __init__(self, vae: BetaVAEPaper, image_size=256, cross_attention_dim=128):
+        super().__init__()
+        from diffusers import UNet2DConditionModel
+
+        self.vae = vae
+        for p in self.vae.parameters():
+            p.requires_grad_(False)
+        self.vae.eval()
+
+        latent_dim = vae.latent_dim
+        unet = UNet2DConditionModel(
+            sample_size=image_size,
+            in_channels=3 + 3,  # noisy high-res + blurred low-res condition
+            out_channels=3,
+            layers_per_block=2,
+            block_out_channels=(64, 64, 128, 128, 256, 256),
+            down_block_types=(
+                "DownBlock2D", "DownBlock2D", "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D", "UpBlock2D", "UpBlock2D",
+            ),
+            cross_attention_dim=cross_attention_dim,
+            class_embed_type="projection",
+            projection_class_embeddings_input_dim=latent_dim,
+        )
+        self.net = nn.ModuleDict({"unet": unet, "cond_proj": nn.Linear(latent_dim, cross_attention_dim)})
+
+    def encode_condition(self, expr_z):
+        with torch.no_grad():
+            mu, _ = self.vae.encode(expr_z)
+        return mu
+
+    def forward(self, noisy_high_res, low_res_cond, t, expr_z):
+        cond = self.encode_condition(expr_z)  # (B, latent_dim)
+        encoder_hidden_states = self.net["cond_proj"](cond).unsqueeze(1)  # (B, 1, cross_attention_dim)
+        net_input = torch.cat((noisy_high_res, low_res_cond), dim=1)
+        return self.net["unet"](
+            net_input, t, encoder_hidden_states=encoder_hidden_states, class_labels=cond,
+        ).sample
+
+
+@torch.no_grad()
+def karras_sample_sr(
+    model, ddpm_scheduler, low_res_cond, expr_z, image_size, device,
+    num_steps=32, rho=7, s_churn=80, s_tmin=0.05, s_tmax=50, s_noise=1.003,
+):
+    """Same Karras et al. (2022) stochastic sampler as karras_sample
+    (see that function's docstring for the VP<->VE conversion details),
+    generalized for the stage-2 model, which additionally takes the
+    blurred low-res conditioning image at every denoising call."""
+    ab = ddpm_scheduler.alphas_cumprod.to(device)
+    sigmas_by_t = torch.sqrt((1 - ab) / ab)
+    sigma_min, sigma_max = sigmas_by_t[0].item(), sigmas_by_t[-1].item()
+
+    def nearest_t(sigma):
+        return torch.argmin(torch.abs(sigmas_by_t - sigma)).item()
+
+    def denoise(x_sigma, sigma):
+        t = nearest_t(sigma)
+        ab_t = ab[t]
+        x_t_scaled = x_sigma * torch.sqrt(ab_t)
+        t_batch = torch.full((x_sigma.shape[0],), t, device=device, dtype=torch.long)
+        eps_pred = model(x_t_scaled, low_res_cond, t_batch, expr_z)
+        return x_sigma - sigma * eps_pred
+
+    sigmas = karras_sigma_schedule(num_steps, sigma_min, sigma_max, rho=rho).to(device)
+    bs = expr_z.shape[0]
+    x = torch.randn(bs, 3, image_size, image_size, device=device) * sigmas[0]
+
+    for i in range(num_steps):
+        sigma_i, sigma_next = sigmas[i], sigmas[i + 1]
+        gamma = min(s_churn / num_steps, 2 ** 0.5 - 1) if s_tmin <= sigma_i <= s_tmax else 0.0
+        sigma_hat = sigma_i * (1 + gamma)
+        if gamma > 0:
+            eps = torch.randn_like(x) * s_noise
+            x_hat = x + (sigma_hat ** 2 - sigma_i ** 2).clamp(min=0).sqrt() * eps
+        else:
+            x_hat = x
+
+        d_i = (x_hat - denoise(x_hat, sigma_hat)) / sigma_hat
+        x_next = x_hat + (sigma_next - sigma_hat) * d_i
+
+        if sigma_next > 0:
+            d_next = (x_next - denoise(x_next, sigma_next)) / sigma_next
+            x_next = x_hat + (sigma_next - sigma_hat) * 0.5 * (d_i + d_next)
+
+        x = x_next
+
+    return x
