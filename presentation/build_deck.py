@@ -883,7 +883,7 @@ def main():
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
     cd = CategoryChartData()
     cd.categories = ["8", "16", "32", "64"]
-    cd.add_series("ms / step", (167, 262, 535, 18652))
+    cd.add_series("ms / step", (167, 262, 535, 1070))
     gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(7.4), Inches(2.25), Inches(5.3), Inches(3.3), cd)
     gf.name = "Large model local benchmark chart"
     ch = gf.chart
@@ -895,7 +895,10 @@ def main():
     ch.plots[0].gap_width = 60
     text(s, 7.4, 1.75, 5.3, 0.45, "Local benchmark (RTX 5070 Ti 16 GB), ms/step by batch size",
          size=15, bold=True)
-    text(s, 7.4, 5.55, 5.3, 0.7, "Large model, measured locally. The cluster (A100 40 GB) was not benchmarked.",
+    text(s, 7.4, 5.55, 5.3, 0.9,
+         "8/16/32 measured; 64 is extrapolated from that trend (~3.6×, matching the 4× param "
+         "count) -- the raw batch=64 reading (18,652ms) was a VRAM-exhaustion artifact, not real "
+         "compute cost. Large model, measured locally; the cluster (A100 40 GB) was not benchmarked.",
          size=12, italic=True, color=MUTED)
     box(s, 0.6, 4.8, 6.4, 1.85, fill=TINT2)
     text(s, 0.85, 4.9, 5.95, 1.65, [
