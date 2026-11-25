@@ -1100,8 +1100,8 @@ def main():
     kicker(s, "4 · Stage 1 FID")
     title(s, "Stage 1: FID at the first checkpoints (training in progress)")
     cd = CategoryChartData()
-    cd.categories = ["999", "1,999", "5,999", "8,999"]
-    cd.add_series("FID", (201.41, 164.66, 88.40, 98.44))
+    cd.categories = ["999", "1,999", "5,999", "8,999", "15,999"]
+    cd.add_series("FID", (201.41, 164.66, 88.40, 98.44, 43.82))
     gf = s.shapes.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(0.6), Inches(1.75), Inches(12.1), Inches(4.55), cd)
     gf.name = "Stage 1 FID progress chart"
     ch = gf.chart
